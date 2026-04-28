@@ -1,28 +1,50 @@
-🚀 PASSO A PASSO PARA EXECUÇÃO DO SISTEMA DISTRIBUÍDO
-Para que o sistema funcione, precisamos de dois terminais abertos: um para o Servidor (que guarda os dados) e outro(s) para o Cliente (que faz os pedidos).
+📦 Sistema de Controle de Estoque Distribuído (v6.0)
+Este projeto consiste em um sistema de gerenciamento de estoque robusto, desenvolvido em Linguagem C. A versão atual (6.0) foca na transição de um sistema local para uma Arquitetura Distribuída, utilizando comunicação via rede e controle rigoroso de concorrência.
 
-1. Compilação (Gerar os programas)
-Abra o terminal na pasta do projeto e digite estes dois comandos:
+🎯 GAPs Resolvidos (Parecer 6.0)
+GAP 01 (Distribuição): Migração de memória compartilhada para comunicação Cliente-Servidor via Sockets TCP/IP.
 
-Para o Servidor:
+GAP 02/03 (Métricas e Testes): Implementação de logs de performance e testes de estresse com múltiplas conexões.
 
-DOS
+GAP 05 (Rastreabilidade): Mapeamento direto entre Requisitos Funcionais (RF) e funções do código.
+
+🏗️ Arquitetura do Sistema
+O sistema opera com dois processos independentes que podem rodar em máquinas distintas:
+
+Servidor (servidor.c): Responsável pelo processamento lógico, persistência em arquivo binário e garantia de atomicidade via Mutex.
+
+Cliente (cliente.c): Interface de comando que encapsula as requisições e as envia via socket para o servidor.
+
+🛠️ Tecnologias e Bibliotecas
+Rede: winsock2.h (Windows Sockets API).
+
+Concorrência: pthread.h (POSIX Threads para controle de exclusão mútua).
+
+Linguagem: C (Padrão ISO C11).
+
+🚀 Passo a Passo: Compilação e Execução
+1. Requisitos
+Compilador GCC (MinGW para Windows).
+
+Biblioteca de sockets vinculada na compilação (-lws2_32).
+
+2. Compilação
+Abra o terminal na pasta do projeto e execute:
+
+Bash
+# Compilar o Servidor
 gcc servidor.c -o servidor -lws2_32 -lpthread
-Para o Cliente:
 
-DOS
+# Compilar o Cliente
 gcc cliente.c -o cliente -lws2_32
-2. Execução (Rodar o Sistema)
-A) Iniciar o Servidor:
-No primeiro terminal, digite:
+3. Execução
+Sempre inicie o servidor primeiro.
+
+No Terminal 1:
 
 DOS
 servidor.exe
-O servidor vai imprimir: "--- SERVIDOR DISTRIBUÍDO ONLINE (Porta 8080) ---". Ele deve ficar aberto o tempo todo.
-
-B) Iniciar o Cliente:
-Abra um segundo terminal (ou peça para o João abrir no PC dele se estiverem na mesma rede) e digite:
+No Terminal 2 (e outros):
 
 DOS
 cliente.exe
-O cliente vai perguntar se você quer consultar ou comprar. Ao escolher, ele manda o dado via Socket, o servidor processa e devolve a resposta.
