@@ -1,3 +1,4 @@
+```markdown
 # 📦 Controle de Estoque Distribuído (C)
 
 Sistema de gerenciamento de estoque desenvolvido em **Linguagem C**, focado em **Computação Paralela** e **Sistemas Distribuídos**. O projeto utiliza Sockets TCP/IP para comunicação cliente-servidor e mecanismos de sincronização para garantir a integridade dos dados.
@@ -35,3 +36,29 @@ Para evitar **Race Conditions** (Condições de Corrida), o projeto implementa:
 1. Clone o repositório:
    ```bash
    git clone [https://github.com/SamuelHLC/Controle_de_estoque_projeto_quinta.git](https://github.com/SamuelHLC/Controle_de_estoque_projeto_quinta.git)
+   ```
+2. Compile o servidor:
+   ```bash
+   gcc servidor.c -o servidor -lpthread
+   ```
+3. Compile o cliente:
+   ```bash
+   gcc cliente.c -o cliente
+   ```
+4. Execute o servidor primeiro e, em seguida, instâncias do cliente.
+
+## 👥 Equipe
+* Samuel Henrique
+* Caio Vinícius
+* João Victor
+* Marcone Oliveira
+```
+
+---
+
+### Dicas rápidas:
+1. **Organização:** Se os seus arquivos estiverem em pastas diferentes, ajuste os comandos de `gcc` no README.
+2. **Prints:** Se tiver tempo depois, tire um print do terminal rodando e coloque no README. Isso valoriza muito o projeto visualmente.
+3. **Link do PDF:** Se quiser, pode até subir o PDF do relatório para o Git e linkar no README.
+
+O que acha? Se quiser que eu mude algum ponto técnico (como o nome de algum arquivo), é só falar!
