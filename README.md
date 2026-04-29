@@ -53,12 +53,3 @@ Para evitar **Race Conditions** (Condições de Corrida), o projeto implementa:
 * João Victor
 * Marcone Oliveira
 ```
-
----
-
-### Dicas rápidas:
-1. **Organização:** Se os seus arquivos estiverem em pastas diferentes, ajuste os comandos de `gcc` no README.
-2. **Prints:** Se tiver tempo depois, tire um print do terminal rodando e coloque no README. Isso valoriza muito o projeto visualmente.
-3. **Link do PDF:** Se quiser, pode até subir o PDF do relatório para o Git e linkar no README.
-
-O que acha? Se quiser que eu mude algum ponto técnico (como o nome de algum arquivo), é só falar!
