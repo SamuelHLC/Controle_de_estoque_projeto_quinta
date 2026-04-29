@@ -1,50 +1,37 @@
-📦 Sistema de Controle de Estoque Distribuído (v6.0)
-Este projeto consiste em um sistema de gerenciamento de estoque robusto, desenvolvido em Linguagem C. A versão atual (6.0) foca na transição de um sistema local para uma Arquitetura Distribuída, utilizando comunicação via rede e controle rigoroso de concorrência.
+# 📦 Controle de Estoque Distribuído (C)
 
-🎯 GAPs Resolvidos (Parecer 6.0)
-GAP 01 (Distribuição): Migração de memória compartilhada para comunicação Cliente-Servidor via Sockets TCP/IP.
+Sistema de gerenciamento de estoque desenvolvido em **Linguagem C**, focado em **Computação Paralela** e **Sistemas Distribuídos**. O projeto utiliza Sockets TCP/IP para comunicação cliente-servidor e mecanismos de sincronização para garantir a integridade dos dados.
 
-GAP 02/03 (Métricas e Testes): Implementação de logs de performance e testes de estresse com múltiplas conexões.
+## 🚀 Status do Projeto: Versão 6.0 (MVP)
+Atualmente, o sistema conta com a lógica de concorrência validada e a arquitetura cliente-servidor modelada. 
+*Nota: Algumas funcionalidades de rede estão em fase final de integração.*
 
-GAP 05 (Rastreabilidade): Mapeamento direto entre Requisitos Funcionais (RF) e funções do código.
+## 🛠️ Tecnologias Utilizadas
+* **Linguagem:** C
+* **Concorrência:** Pthreads (POSIX Threads)
+* **Sincronização:** Mutex e Semáforos
+* **Rede:** Sockets TCP/IP
+* **Algoritmos:** QuickSort Paralelo
+* **Persistência:** Arquivos Binários (`.dat`)
 
-🏗️ Arquitetura do Sistema
-O sistema opera com dois processos independentes que podem rodar em máquinas distintas:
+## 🏗️ Arquitetura
+O sistema segue o modelo **Cliente-Servidor**:
+1. **Servidor:** Gerencia o estoque, processa as vendas, controla o acesso simultâneo via Mutex e realiza a persistência em disco.
+2. **Cliente:** Interface via terminal (CLI) que envia requisições para o servidor.
 
-Servidor (servidor.c): Responsável pelo processamento lógico, persistência em arquivo binário e garantia de atomicidade via Mutex.
+## 🔒 Mecanismos de Sincronização
+Para evitar **Race Conditions** (Condições de Corrida), o projeto implementa:
+- **Mutex:** Garante exclusão mútua em operações de escrita (vendas e cadastros).
+- **Semáforos:** Controlam o fluxo de leitura simultânea no estoque.
 
-Cliente (cliente.c): Interface de comando que encapsula as requisições e as envia via socket para o servidor.
+## 📋 Funcionalidades
+- [x] Cadastro de Produtos e Categorias.
+- [x] Ordenação eficiente via QuickSort $O(n \log n)$.
+- [x] Persistência binária automática.
+- [x] Logs de concorrência em tempo real.
+- [x] Simulação de múltiplos compradores simultâneos.
 
-🛠️ Tecnologias e Bibliotecas
-Rede: winsock2.h (Windows Sockets API).
-
-Concorrência: pthread.h (POSIX Threads para controle de exclusão mútua).
-
-Linguagem: C (Padrão ISO C11).
-
-🚀 Passo a Passo: Compilação e Execução
-1. Requisitos
-Compilador GCC (MinGW para Windows).
-
-Biblioteca de sockets vinculada na compilação (-lws2_32).
-
-2. Compilação
-Abra o terminal na pasta do projeto e execute:
-
-Bash
-# Compilar o Servidor
-gcc servidor.c -o servidor -lws2_32 -lpthread
-
-# Compilar o Cliente
-gcc cliente.c -o cliente -lws2_32
-3. Execução
-Sempre inicie o servidor primeiro.
-
-No Terminal 1:
-
-DOS
-servidor.exe
-No Terminal 2 (e outros):
-
-DOS
-cliente.exe
+## 🚀 Como Executar
+1. Clone o repositório:
+   ```bash
+   git clone [https://github.com/SamuelHLC/Controle_de_estoque_projeto_quinta.git](https://github.com/SamuelHLC/Controle_de_estoque_projeto_quinta.git)
