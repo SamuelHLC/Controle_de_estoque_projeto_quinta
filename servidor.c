@@ -1,83 +1,59 @@
 #include <stdio.h>
 #include <winsock2.h>
-#include <pthread.h>
+#include <windows.h>
+#include <stdlib.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
-typedef struct {
-    int qtd;
-    pthread_mutex_t lock;
-} Estoque;
+typedef struct { int id; char nome[50]; char categoria[30]; float preco; int qtd; } Produto;
 
-Estoque prod = {20, PTHREAD_MUTEX_INITIALIZER};
+Produto lista[100];
+int total_produtos = 0;
+HANDLE lock;
 
-// Função que cada thread de cliente vai executar
-void* tratar_cliente(void* arg) {
-    SOCKET novo_s = *(SOCKET*)arg;
-    int opcao;
-    
-    if (recv(novo_s, (char*)&opcao, sizeof(int), 0) > 0) {
-        if(opcao == 1) { 
-            printf("[Socket %d] Solicitou consulta de estoque.\n", (int)novo_s);
-            send(novo_s, (char*)&prod.qtd, sizeof(int), 0);
-        } 
-        else if(opcao == 2) { 
-            printf("[Socket %d] Tentando acessar SECAO CRITICA (Locking Mutex)...\n", (int)novo_s);
-            
-            pthread_mutex_lock(&prod.lock); 
-            
-            printf("[Socket %d] >> DENTRO DA SECAO CRITICA. Processando venda...\n", (int)novo_s);
-            if(prod.qtd > 0) {
-                prod.qtd--;
-                send(novo_s, "Venda OK", 20, 0);
-                printf("[Socket %d] Venda concluída. Estoque restante: %d\n", (int)novo_s, prod.qtd);
-            } else {
-                send(novo_s, "Sem Estoque", 20, 0);
-                printf("[Socket %d] Falha: Estoque zerado.\n", (int)novo_s);
-            }
-            
-            pthread_mutex_unlock(&prod.lock);
-            printf("[Socket %d] Saiu da SECAO CRITICA (Unlocking Mutex).\n", (int)novo_s);
+void salvar() {
+    FILE *f = fopen("estoque.dat", "wb");
+    if (f) { fwrite(&total_produtos, sizeof(int), 1, f); fwrite(lista, sizeof(Produto), total_produtos, f); fclose(f); }
+}
+
+void carregar() {
+    FILE *f = fopen("estoque.dat", "rb");
+    if (f) { fread(&total_produtos, sizeof(int), 1, f); fread(lista, sizeof(Produto), total_produtos, f); fclose(f); }
+}
+
+DWORD WINAPI tratar(LPVOID arg) {
+    SOCKET s = *(SOCKET*)arg;
+    int dados[3];
+    if (recv(s, (char*)dados, sizeof(dados), 0) > 0) {
+        if (dados[0] == 0) { // Envia lista
+            send(s, (char*)&total_produtos, sizeof(int), 0);
+            send(s, (char*)lista, sizeof(Produto) * total_produtos, 0);
+        } else if (dados[0] == 2) { // Compra
+            int idx = -1;
+            for(int i=0; i<total_produtos; i++) if(lista[i].id == dados[1]) idx = i;
+            WaitForSingleObject(lock, INFINITE);
+            if (idx != -1 && lista[idx].qtd >= dados[2]) {
+                lista[idx].qtd -= dados[2]; salvar(); send(s, "COMPRA OK", 30, 0);
+            } else send(s, "ERRO NO ESTOQUE", 30, 0);
+            ReleaseMutex(lock);
         }
     }
-
-    closesocket(novo_s);
-    free(arg);
-    return NULL;
+    closesocket(s); free(arg); return 0;
 }
 
 int main() {
-    WSADATA wsa;
-    SOCKET s;
-    struct sockaddr_in server;
-
-    WSAStartup(MAKEWORD(2,2), &wsa);
-    s = socket(AF_INET, SOCK_STREAM, 0);
-
-    server.sin_family = AF_INET;
-    server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_port = htons(8080);
-
-    bind(s, (struct sockaddr *)&server, sizeof(server));
-    listen(s, 10); // Aumentado para suportar mais conexões em fila
-
-    printf("--- SERVIDOR DISTRIBUIDO MULTI-THREAD ONLINE (Porta 8080) ---\n");
-
+    WSADATA w; WSAStartup(0x0202, &w);
+    lock = CreateMutex(NULL, FALSE, NULL);
+    carregar();
+    SOCKET s = socket(2, 1, 0);
+    struct sockaddr_in adr = {2, htons(8080), 0};
+    bind(s, (struct sockaddr*)&adr, sizeof(adr));
+    listen(s, 5);
+    printf("SERVIDOR ATIVO NA PORTA 8080\n");
     while(1) {
-        struct sockaddr_in cliente_addr;
-        int tam = sizeof(cliente_addr);
-        SOCKET* novo_s = malloc(sizeof(SOCKET));
-        *novo_s = accept(s, (struct sockaddr*)&cliente_addr, &tam);
-
-        printf("\n[SISTEMA] Nova conexao aceita no Socket %d\n", (int)*novo_s);
-
-        // Criando a thread para gerenciar o novo cliente de forma independente
-        pthread_t thread_id;
-        pthread_create(&thread_id, NULL, tratar_cliente, novo_s);
-        pthread_detach(thread_id); // Libera os recursos da thread ao finalizar
+        SOCKET* ns = malloc(sizeof(SOCKET));
+        *ns = accept(s, 0, 0);
+        CreateThread(0, 0, tratar, ns, 0, 0);
     }
-
-    closesocket(s);
-    WSACleanup();
     return 0;
 }
