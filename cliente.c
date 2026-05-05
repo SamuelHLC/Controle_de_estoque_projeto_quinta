@@ -8,11 +8,12 @@ int main() {
     SOCKET s;
     struct sockaddr_in server;
     int menu, resposta_qtd;
-    char buffer[20];
+    char buffer[20] = {0};
 
     WSAStartup(MAKEWORD(2,2), &wsa);
     
-    printf("1. Consultar | 2. Comprar: ");
+    printf("--- CLIENTE LOJA DISTRIBUIDA ---\n");
+    printf("1. Consultar Estoque\n2. Comprar Produto\nEscolha: ");
     scanf("%d", &menu);
 
     s = socket(AF_INET, SOCK_STREAM, 0);
@@ -20,17 +21,22 @@ int main() {
     server.sin_family = AF_INET;
     server.sin_port = htons(8080);
 
-    connect(s, (struct sockaddr *)&server, sizeof(server));
+    if (connect(s, (struct sockaddr *)&server, sizeof(server)) < 0) {
+        printf("Erro ao conectar ao servidor.\n");
+        return 1;
+    }
+
     send(s, (char*)&menu, sizeof(int), 0);
 
     if(menu == 1) {
         recv(s, (char*)&resposta_qtd, sizeof(int), 0);
-        printf("Estoque atual: %d\n", resposta_qtd);
+        printf("\n[RESPOSTA] Estoque atual: %d unidades.\n", resposta_qtd);
     } else {
         recv(s, buffer, 20, 0);
-        printf("Servidor diz: %s\n", buffer);
+        printf("\n[RESPOSTA] Servidor diz: %s\n", buffer);
     }
 
     closesocket(s);
+    WSACleanup();
     return 0;
 }
