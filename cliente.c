@@ -13,8 +13,10 @@ typedef struct {
 } Produto;
 
 void buscar_estoque(Produto* l, int* t) {
-    SOCKET s = socket(2, 1, 0);
-    struct sockaddr_in adr = {2, htons(8080), inet_addr("127.0.0.1")};
+    // Ajustado para AF_INET (2) e porta 8085
+    SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in adr = {AF_INET, htons(8085), inet_addr("127.0.0.1")};
+    
     if (connect(s, (struct sockaddr*)&adr, sizeof(adr)) == 0) {
         int r[3] = {0, 0, 0}; 
         send(s, (char*)r, sizeof(r), 0);
@@ -50,16 +52,19 @@ int main() {
             int q;
             printf(" Quantidade desejada: "); scanf("%d", &q);
             
-            // Medição de Desempenho (Métrica sugerida pelo professor)[cite: 1]
+            // Medição de Desempenho (Métrica sugerida pelo professor)
             clock_t inicio = clock();
             
-            SOCKET s = socket(2, 1, 0);
-            struct sockaddr_in adr = {2, htons(8080), inet_addr("127.0.0.1")};
+            // Ajustado para AF_INET (2) e porta 8085
+            SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+            struct sockaddr_in adr = {AF_INET, htons(8085), inet_addr("127.0.0.1")};
+            
             if(connect(s, (struct sockaddr*)&adr, sizeof(adr)) == 0) {
                 int req[3] = {2, lista[idx].id, q};
                 send(s, (char*)req, sizeof(req), 0);
                 char res[30];
-                recv(s, res, 30, 0);
+                int bytes = recv(s, res, 29, 0); // Proteção para não estourar a string
+                if (bytes > 0) res[bytes] = '\0';
                 
                 clock_t fim = clock();
                 double tempo = ((double)(fim - inicio)) / CLOCKS_PER_SEC;
