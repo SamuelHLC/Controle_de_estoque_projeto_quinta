@@ -1,61 +1,126 @@
 #include <stdio.h>
 #include <winsock2.h>
+#include <stdlib.h>
+#include <string.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
-typedef struct { int id; char nome[50]; char categoria[30]; float preco; int qtd; } Produto;
+typedef struct { 
+    int id; 
+    char nome[50]; 
+    char categoria[30]; 
+    float preco; 
+    int qtd; 
+} Produto;
 
-void sync_loja(Produto* l, int* t) {
-    SOCKET s = socket(2, 1, 0);
-    struct sockaddr_in adr = {2, htons(8080), inet_addr("127.0.0.1")};
-    if (connect(s, (struct sockaddr*)&adr, sizeof(adr)) == 0) {
-        int r[3] = {0,0,0}; send(s, (char*)r, sizeof(r), 0);
-        recv(s, (char*)t, sizeof(int), 0);
-        if (*t > 0) recv(s, (char*)l, sizeof(Produto) * (*t), 0);
+Produto lista[100];
+int total = 0;
+
+// Mecanismos de Sincronização (RF_07, RF_08, RF_10)
+HANDLE mutex_estoque;
+HANDLE semaforo_leitura;
+
+// RF_04: Ordenação QuickSort O(n log n)
+int comparar_id(const void *a, const void *b) {
+    return ((Produto*)a)->id - ((Produto*)b)->id;
+}
+
+void salvar_dados() {
+    FILE *f = fopen("estoque.dat", "wb");
+    if (f) {
+        fwrite(&total, sizeof(int), 1, f);
+        fwrite(lista, sizeof(Produto), total, f);
+        fclose(f);
     }
+}
+
+void carregar_dados() {
+    FILE *f = fopen("estoque.dat", "rb");
+    if (f) {
+        if(fread(&total, sizeof(int), 1, f) != 1) total = 0;
+        else fread(lista, sizeof(Produto), total, f);
+        fclose(f);
+    }
+}
+
+DWORD WINAPI tratar_cliente(LPVOID lpParam) {
+    SOCKET s = *(SOCKET*)lpParam;
+    free(lpParam);
+
+    struct sockaddr_in cliente_info;
+    int size = sizeof(cliente_info);
+    getpeername(s, (struct sockaddr*)&cliente_info, &size);
+
+    int req[3]; // [0]=Tipo, [1]=ID, [2]=Qtd
+    if (recv(s, (char*)req, sizeof(req), 0) <= 0) {
+        closesocket(s);
+        return 0;
+    }
+
+    // RF_09: Logs de Concorrência e Rede
+    printf("\n[REDE] Cliente %s conectado.\n", inet_ntoa(cliente_info.sin_addr));
+
+    if (req[0] == 0) { // OPERAÇÃO DE LEITURA
+        // RF_10: Controle de Leitura com Semáforo
+        printf("[SEM] Thread %d aguardando semaforo de leitura...\n", GetCurrentThreadId());
+        WaitForSingleObject(semaforo_leitura, INFINITE);
+        
+        printf("[SEM] Thread %d lendo estoque (Sincronizacao Hibrida).\n", GetCurrentThreadId());
+        qsort(lista, total, sizeof(Produto), comparar_id); // RF_04
+        
+        send(s, (char*)&total, sizeof(int), 0);
+        if (total > 0) send(s, (char*)lista, sizeof(Produto) * total, 0);
+        
+        ReleaseSemaphore(semaforo_leitura, 1, NULL);
+    } 
+    else if (req[0] == 2) { // OPERAÇÃO DE ESCRITA (COMPRA)
+        // RF_07: Mutex para evitar Race Condition
+        printf("[MTX] Thread %d bloqueada: Aguardando Mutex...\n", GetCurrentThreadId());
+        WaitForSingleObject(mutex_estoque, INFINITE);
+        
+        printf("[MTX] Thread %d em SECAO CRITICA - Processando ID %d\n", GetCurrentThreadId(), req[1]);
+        char resposta[30] = "Erro: Produto esgotado";
+
+        for (int i = 0; i < total; i++) {
+            if (lista[i].id == req[1] && lista[i].qtd >= req[2]) {
+                lista[i].qtd -= req[2];
+                strcpy(resposta, "Compra confirmada!");
+                salvar_dados(); // Persistência RNF_02[cite: 1]
+                break;
+            }
+        }
+        
+        send(s, resposta, 30, 0);
+        printf("[MTX] Thread %d concluiu. Liberando Mutex.\n", GetCurrentThreadId());
+        ReleaseMutex(mutex_estoque);
+    }
+
     closesocket(s);
+    return 0;
 }
 
 int main() {
     WSADATA w; WSAStartup(0x0202, &w);
-    Produto lista[100];
-    int total = 0, idx = 0, op;
+    carregar_dados();
 
-    do {
-        sync_loja(lista, &total);
-        system("cls");
-        printf("======= LOJA VIRTUAL =======\n");
-        int fim = (idx + 5 > total) ? total : idx + 5;
-        
-        if (total > 0) {
-            for (int i = idx; i < fim; i++) {
-                printf(" [%d] %-15s | R$ %.2f | Estoque: %d\n", i + 1, lista[i].nome, lista[i].preco, lista[i].qtd);
-            }
-            printf("\n Pagina %d de %d\n", (idx/5)+1, (total == 0 ? 1 : (total-1)/5 + 1));
-        } else printf(" LOJA SEM PRODUTOS CADASTRADOS\n");
+    // Inicialização (RF_07 e RF_10)[cite: 1]
+    mutex_estoque = CreateMutex(NULL, FALSE, NULL);
+    semaforo_leitura = CreateSemaphore(NULL, 2, 2, NULL); // Até 2 leituras simultâneas
 
-        printf("----------------------------\n");
-        printf(" 1. Comprar | 2. Prox Pag | 3. Ant Pag | 4. Sair\n Escolha: ");
-        scanf("%d", &op);
+    SOCKET servidor = socket(2, 1, 0);
+    struct sockaddr_in adr = {2, htons(8080), 0};
+    bind(servidor, (struct sockaddr*)&adr, sizeof(adr));
+    listen(servidor, 10);
 
-        if (op == 1 && total > 0) {
-            int sel, q;
-            printf(" Escolha o numero do item ([%d]-[%d]): ", idx + 1, fim); scanf("%d", &sel);
-            printf(" Quantidade desejada: "); scanf("%d", &q);
-            
-            SOCKET s = socket(2, 1, 0);
-            struct sockaddr_in adr = {2, htons(8080), inet_addr("127.0.0.1")};
-            if(connect(s, (struct sockaddr*)&adr, sizeof(adr)) == 0) {
-                int c[3] = {2, lista[sel-1].id, q};
-                send(s, (char*)c, sizeof(c), 0);
-                char res[30]; recv(s, res, 30, 0);
-                printf(" RESPOSTA DO SERVIDOR: %s\n", res);
-            }
-            closesocket(s); system("pause");
-        } else if (op == 2 && idx + 5 < total) idx += 5;
-        else if (op == 3 && idx - 5 >= 0) idx -= 5;
+    printf("==============================================\n");
+    printf(" SERVIDOR DISTRIBUIDO V6.0 - AGUARDANDO REDE  \n");
+    printf("==============================================\n");
 
-    } while (op != 4);
-    WSACleanup();
+    while (1) {
+        SOCKET* p_cliente = malloc(sizeof(SOCKET));
+        *p_cliente = accept(servidor, 0, 0);
+        CreateThread(NULL, 0, tratar_cliente, p_cliente, 0, NULL);
+    }
+
     return 0;
 }
