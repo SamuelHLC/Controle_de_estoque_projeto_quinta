@@ -2,11 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Estrutura idêntica à do Servidor e Cliente para garantir compatibilidade
+// CORRIGIDO: campo renomeado de "categoria" para "category" para ser identico ao servidor.c
 typedef struct { 
     int id; 
     char nome[50]; 
-    char categoria[30]; 
+    char category[30];   // era: char categoria[30]
     float preco; 
     int qtd; 
 } Produto;
@@ -48,10 +48,10 @@ int main() {
         printf("   PAINEL DO ADMINISTRADOR - CONTROLE DE ESTOQUE  \n");
         printf("==================================================\n");
         
-        // RF_03: Visualizar Estoque[cite: 1]
+        // RF_03: Visualizar Estoque
         int fim = (idx + 5 > total) ? total : idx + 5;
         if (total > 0) {
-            qsort(lista, total, sizeof(Produto), comparar_id); // Garante visualização ordenada
+            qsort(lista, total, sizeof(Produto), comparar_id);
             for (int i = idx; i < fim; i++) {
                 printf(" [%d] ID: %03d | %-15s | R$ %.2f | Est: %d\n", 
                         i + 1, lista[i].id, lista[i].nome, lista[i].preco, lista[i].qtd);
@@ -82,12 +82,12 @@ int main() {
         }
 
         switch(op) {
-            case 1: // RF_02: Cadastrar Produto[cite: 1]
+            case 1: // RF_02: Cadastrar Produto
                 if (total < 100) {
-                    printf("ID (numérico): "); scanf("%d", &lista[total].id);
-                    printf("Nome: "); scanf(" %[^\n]s", lista[total].nome);
-                    printf("Categoria: "); scanf(" %[^\n]s", lista[total].categoria);
-                    printf("Preco: "); scanf("%f", &total[lista].preco); // Correção de sintaxe para lista[total]
+                    printf("ID (numerico): "); scanf("%d", &lista[total].id);
+                    printf("Nome: "); scanf(" %[^\n]", lista[total].nome);
+                    printf("Categoria: "); scanf(" %[^\n]", lista[total].category); // CORRIGIDO: era lista[total].categoria
+                    printf("Preco: "); scanf("%f", &lista[total].preco);            // CORRIGIDO: era &total[lista].preco (bug de sintaxe)
                     printf("Qtd Inicial: "); scanf("%d", &lista[total].qtd);
                     total++;
                     salvar();
@@ -98,7 +98,7 @@ int main() {
 
             case 2:
                 if(sel >= 0 && sel < total) { 
-                    printf("Novo Nome: "); scanf(" %[^\n]s", lista[sel].nome); 
+                    printf("Novo Nome: "); scanf(" %[^\n]", lista[sel].nome); 
                     salvar(); 
                 } break;
 
