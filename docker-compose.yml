@@ -3,24 +3,23 @@
 #
 #  Serviços:
 #    servidor-estoque  — núcleo concorrente (mutex + semáforo POSIX)
-#    cliente-pdv       — interface de compras (subir manualmente)
-#    admin-painel      — CRUD de estoque (acessa estoque.dat direto)
+#    cliente-pdv       — interface de compras (sobe manualmente)
+#    admin-painel      — CRUD de estoque via socket TCP
 #
-#  Redes : rede-estoque (bridge interna isolada)
-#  Volumes:
-#    ./logs       → /logs   (logs persistentes)
-#    dados-estoque          (estoque.dat compartilhado entre server+admin)
+#  Simulação distribuída real:
+#    Use o script simular.ps1 (Windows) ou simular.sh (Linux/Mac).
+#    Os containers de usuario NAO sao removidos ao terminar — ficam
+#    em standby no Docker para o professor inspecionar com:
+#      docker ps
+#      docker logs <container_id>
+#      docker inspect <container_id> | grep IPAddress
 #
-#  CORRECOES:
-#  [1] container_name removido do cliente-pdv — nome fixo impedia o uso
-#      de --scale (Docker rejeita multiplos containers com o mesmo nome).
-#
-#  [2] depends_on do admin-painel migrado para condition: service_healthy
-#      garantindo que o admin so sobe apos o servidor estar de fato pronto.
-#
-#  [3] cliente-pdv movido para profile "manual" — nao sobe mais sozinho
-#      com docker-compose up, evitando poluir o terminal do servidor.
-#      Use: docker-compose run --rm cliente-pdv
+#  Comandos principais:
+#    docker compose up --build           → sobe o servidor
+#    docker compose run --rm cliente-pdv → abre cliente interativo
+#    docker compose run --rm admin-painel → abre painel admin
+#    ./simular.ps1                        → simulação distribuída
+#    docker compose down                  → encerra tudo
 # ══════════════════════════════════════════════════════════════════════
 
 services:
@@ -51,24 +50,24 @@ services:
     restart: unless-stopped
 
     healthcheck:
-      # FIX: pgrep nao conecta no socket, evita logs espurios a cada 5s
       test: ["CMD-SHELL", "pgrep servidor > /dev/null && echo ok"]
       interval: 5s
       timeout: 3s
       retries: 5
       start_period: 3s
 
-  # ── Cliente PDV: subir manualmente quando precisar ───────────────────
-  # FIX [3]: profile "manual" impede subida automatica com docker-compose up
-  # O terminal do servidor fica limpo, mostrando apenas logs reais.
+  # ── Cliente PDV ───────────────────────────────────────────────────────
+  # Modo interativo:
+  #   docker compose run --rm cliente-pdv
   #
-  # Para abrir um cliente:
-  #   docker-compose run --rm cliente-pdv
+  # Modo automatico (usado pelo simular.ps1 / simular.sh):
+  #   Os containers NAO usam --rm: ficam rodando apos a compra.
+  #   Cada container tem IP proprio visivel em:
+  #     docker inspect <id> | grep IPAddress
+  #   Para encerrar todos os containers de simulacao:
+  #     docker compose stop
   #
-  # Para abrir N clientes em terminais diferentes (modo simulacao):
-  #   docker-compose run --rm cliente-pdv  (terminal 1)
-  #   docker-compose run --rm cliente-pdv  (terminal 2)
-  #   docker-compose run --rm cliente-pdv  (terminal 3)
+  # O profile "manual" impede subida automatica com docker compose up.
   cliente-pdv:
     image: estoque/app:latest
     command: /app/build/cliente
@@ -84,6 +83,8 @@ services:
       SERVIDOR_HOST: "servidor-estoque"
       SERVIDOR_PORT: "8085"
       LOG_DIR: "/logs"
+      # MODO_AUTO, PRODUTO_ID, QUANTIDADE, USUARIO_ID injetados
+      # dinamicamente pelo simular.ps1 via -e na linha de comando
 
     depends_on:
       servidor-estoque:
@@ -92,9 +93,7 @@ services:
     stdin_open: true
     tty: true
 
-  # ── Admin: painel de CRUD (acessa estoque.dat direto) ────────────────
-  # Rode manualmente quando precisar:
-  #   docker-compose run --rm admin-painel
+  # ── Admin: painel de CRUD ─────────────────────────────────────────────
   admin-painel:
     image: estoque/app:latest
     container_name: admin-painel
@@ -111,6 +110,8 @@ services:
     working_dir: /app/data
 
     environment:
+      SERVIDOR_HOST: "servidor-estoque"
+      SERVIDOR_PORT: "8085"
       LOG_DIR: "/logs"
 
     depends_on:
@@ -133,27 +134,3 @@ networks:
 # ── Volumes ─────────────────────────────────────────────────────────────
 volumes:
   dados-estoque:
-
-# ══════════════════════════════════════════════════════════════════════
-#  COMANDOS ÚTEIS
-#
-#  Subir apenas o servidor:
-#    docker-compose up --build
-#
-#  Abrir cliente (em outro terminal):
-#    docker-compose run --rm cliente-pdv
-#
-#  Abrir painel admin (em outro terminal):
-#    docker-compose run --rm admin-painel
-#
-#  Ver logs em tempo real:
-#    docker-compose logs -f servidor-estoque
-#
-#  Helgrind (race conditions) no servidor:
-#    docker exec -it servidor-estoque \
-#      valgrind --tool=helgrind --log-file=/logs/helgrind.log \
-#               /app/build/servidor
-#
-#  Derrubar tudo:
-#    docker-compose down -v
-# ══════════════════════════════════════════════════════════════════════

@@ -1,35 +1,13 @@
 /*
  * cliente.c — Interface de usuario para consultas e compras
- * Log: cliente_<PID>.log  (cada instancia Docker gera seu proprio log)
+ * Log: cliente_<PID>.log
  *
- * MIGRADO: WinSock2 + Windows.h  →  POSIX sockets + pthreads
- *
- * No Docker voce pode subir N replicas com:
- *   docker-compose up --scale cliente-pdv=3
- * Cada container tera seu proprio PID e seu proprio arquivo de log.
- *
- * CORRECOES/ADICOES:
- *  [1] MODO SIMULACAO adicionado: ao iniciar, o cliente pergunta o modo:
- *        1 = Modo Interativo (comportamento original inalterado)
- *        2 = Modo Simulacao  (N usuarios simultaneos via pthreads)
- *      No Modo Simulacao voce informa:
- *        - Numero de usuarios simultaneos (threads)
- *        - ID do produto que todos tentarao comprar
- *        - Quantidade que CADA usuario tenta comprar
- *      Cada thread abre sua propria conexao TCP com o servidor,
- *      envia a requisicao de compra e registra o resultado no log.
- *      Ao final exibe e loga o resumo (confirmadas/recusadas/erros/tempo).
- *
- *  [2] Log agora e thread-safe via mutex_log_cli — necessario pois no
- *      modo simulacao multiplas threads escrevem no mesmo arquivo.
- *
- *  [3] Cast corrigido em inet_addr(): comparacao com (in_addr_t)INADDR_NONE
- *      evita warning/comportamento indefinido em alguns compiladores.
- *
- *  Todos os logs originais foram preservados integralmente.
- *  Novos niveis de log:
- *    [SIM] — controle da simulacao (inicio, parametros, resumo final)
- *    [THR] — cada thread de usuario simulado (tentativa + resultado)
+ * CORRECOES V3:
+ *  [V3-1] IP proprio do container exibido ao iniciar e em cada log
+ *  [V3-2] IP do servidor exibido ao conectar
+ *  [V3-3] Containers de simulacao ficam rodando apos a compra
+ *  [V3-4] USUARIO_ID enviado junto na requisicao de compra (op=2)
+ *         Servidor loga: cliente=IP usuario=#N
  */
 
 #include <stdio.h>
@@ -43,6 +21,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <ifaddrs.h>
 
 typedef struct {
     int   id;
@@ -53,255 +32,190 @@ typedef struct {
 } Produto;
 
 FILE           *arq_log       = NULL;
-/* FIX [2]: mutex para log thread-safe no modo simulacao */
 pthread_mutex_t mutex_log_cli = PTHREAD_MUTEX_INITIALIZER;
 
+char ip_proprio[INET_ADDRSTRLEN]         = "desconhecido";
+char ip_servidor_remoto[INET_ADDRSTRLEN] = "desconhecido";
+
 /* ══════════════════════════════════════════════════════════════════════
- * LOG — mutex garante atomicidade no modo simulacao (multi-thread)
+ * HELPERS
+ * ══════════════════════════════════════════════════════════════════════ */
+static int recv_completo(int s, void *buf, int tam) {
+    int lido = 0; char *ptr = (char*)buf;
+    while (lido < tam) {
+        int n = recv(s, ptr + lido, tam - lido, 0);
+        if (n <= 0) return lido == 0 ? -1 : lido;
+        lido += n;
+    }
+    return lido;
+}
+
+static int send_completo(int s, const void *buf, int tam) {
+    int env = 0; const char *ptr = (const char*)buf;
+    while (env < tam) {
+        int n = send(s, ptr + env, tam - env, MSG_NOSIGNAL);
+        if (n <= 0) return -1;
+        env += n;
+    }
+    return env;
+}
+
+static void descobrir_ip_proprio(char *out, int len) {
+    struct ifaddrs *ifap, *ifa;
+    if (getifaddrs(&ifap) == -1) { strncpy(out, "127.0.0.1", len); return; }
+    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        char tmp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr, tmp, sizeof(tmp));
+        if (strcmp(tmp, "127.0.0.1") != 0) {
+            strncpy(out, tmp, len);
+            freeifaddrs(ifap);
+            return;
+        }
+    }
+    strncpy(out, "127.0.0.1", len);
+    freeifaddrs(ifap);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * LOG
  * ══════════════════════════════════════════════════════════════════════ */
 void log_evento(const char *nivel, const char *msg) {
     time_t agora = time(NULL);
-    struct tm *t  = localtime(&agora);
-    char ts[32];
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", t);
-
+    struct tm tb; struct tm *t = localtime_r(&agora, &tb);
+    char ts[32]; strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", t);
     pthread_mutex_lock(&mutex_log_cli);
-    printf("[%s][%s] %s\n", ts, nivel, msg);
+    printf("[%s][%s][IP:%s] %s\n", ts, nivel, ip_proprio, msg);
     fflush(stdout);
-    if (arq_log) {
-        fprintf(arq_log, "[%s][%s] %s\n", ts, nivel, msg);
-        fflush(arq_log);
-    }
+    if (arq_log) { fprintf(arq_log, "[%s][%s][IP:%s] %s\n", ts, nivel, ip_proprio, msg); fflush(arq_log); }
     pthread_mutex_unlock(&mutex_log_cli);
 }
 
 void log_fmt(const char *nivel, const char *fmt, ...) {
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
+    char buf[512]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
     log_evento(nivel, buf);
 }
 
-/* ── Resolve host do servidor via variavel de ambiente ───────────────
- * No docker-compose SERVIDOR_HOST=servidor-estoque
- * O Docker resolve "servidor-estoque" para o IP interno do container.
- * Localmente sem Docker, cai em 127.0.0.1.
- * ─────────────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════
+ * ENDERECO DO SERVIDOR
+ * ══════════════════════════════════════════════════════════════════════ */
 static void obter_endereco(struct sockaddr_in *adr) {
     const char *host = getenv("SERVIDOR_HOST");
     const char *port = getenv("SERVIDOR_PORT");
-
     if (!host || strlen(host) == 0) host = "127.0.0.1";
     int porta = (port && strlen(port) > 0) ? atoi(port) : 8085;
-
     memset(adr, 0, sizeof(*adr));
     adr->sin_family = AF_INET;
     adr->sin_port   = htons(porta);
-
-    /* FIX [3]: cast para (in_addr_t) evita warning na comparacao */
     if (inet_addr(host) != (in_addr_t)INADDR_NONE) {
         adr->sin_addr.s_addr = inet_addr(host);
+        strncpy(ip_servidor_remoto, host, INET_ADDRSTRLEN);
     } else {
         struct hostent *he = gethostbyname(host);
         if (he) {
             memcpy(&adr->sin_addr, he->h_addr_list[0], he->h_length);
+            inet_ntop(AF_INET, he->h_addr_list[0], ip_servidor_remoto, INET_ADDRSTRLEN);
         } else {
             adr->sin_addr.s_addr = inet_addr("127.0.0.1");
-            log_fmt("WARN", "Nao resolveu '%s' — usando 127.0.0.1", host);
+            strncpy(ip_servidor_remoto, "127.0.0.1", INET_ADDRSTRLEN);
         }
     }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- * COMUNICACAO COM O SERVIDOR
+ * BUSCAR ESTOQUE
  * ══════════════════════════════════════════════════════════════════════ */
 void buscar_estoque(Produto *l, int *t) {
-    log_evento("NET", "Solicitando lista de produtos ao servidor...");
-
     int s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) {
-        log_evento("ERRO", "Falha ao criar socket");
-        *t = 0;
-        return;
-    }
-
-    struct sockaddr_in adr;
-    obter_endereco(&adr);
-
+    if (s < 0) { *t = 0; return; }
+    struct sockaddr_in adr; obter_endereco(&adr);
     if (connect(s, (struct sockaddr*)&adr, sizeof(adr)) == 0) {
-        int r[3] = {0, 0, 0};
-        send(s, (char*)r, sizeof(r), 0);
-
-        int recebidos = recv(s, (char*)t, sizeof(int), 0);
-
-        if (recebidos > 0 && *t > 0) {
-            int tam        = sizeof(Produto) * (*t);
-            int total_lido = 0;
-            char *ptr      = (char*)l;
-
-            while (total_lido < tam) {
-                int n = recv(s, ptr + total_lido, tam - total_lido, 0);
-                if (n <= 0) break;
-                total_lido += n;
+        int r[4] = {0, 0, 0, 0};
+        send_completo(s, r, sizeof(r));
+        if (recv_completo(s, t, sizeof(int)) <= 0) { *t = 0; close(s); return; }
+        if (*t > 0) {
+            if (recv_completo(s, l, sizeof(Produto) * (*t)) <= 0) {
+                *t = 0;
+                log_evento("WARN", "Falha ao receber lista completa");
             }
-            log_fmt("NET", "Estoque recebido: %d produto(s) (%d bytes)", *t, total_lido);
-        } else {
-            *t = 0;
-            log_evento("WARN", "Servidor retornou estoque vazio ou erro na recepcao");
         }
     } else {
-        log_evento("ERRO", "Nao foi possivel conectar ao servidor");
+        log_fmt("ERRO", "Nao foi possivel conectar | cliente=%s -> servidor=%s:8085",
+                ip_proprio, ip_servidor_remoto);
         *t = 0;
     }
-
     close(s);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- * MODO SIMULACAO — FIX [1]
+ * MODO AUTOMATICO
+ * Envia req[4] = {op, produto_id, quantidade, usuario_id}
+ * Servidor loga: cliente=IP usuario=#N
  * ══════════════════════════════════════════════════════════════════════ */
-typedef struct {
-    int usuario_id;
-    int produto_id;
-    int quantidade;
-} SimArgs;
+static int modo_automatico() {
+    const char *s_id  = getenv("PRODUTO_ID");
+    const char *s_qtd = getenv("QUANTIDADE");
+    const char *s_usr = getenv("USUARIO_ID");
 
-static int sim_confirmadas = 0;
-static int sim_recusadas   = 0;
-static int sim_erros       = 0;
-static pthread_mutex_t mutex_sim_cont = PTHREAD_MUTEX_INITIALIZER;
+    int produto_id = s_id  ? atoi(s_id)  : 0;
+    int quantidade = s_qtd ? atoi(s_qtd) : 0;
+    int usuario_id = s_usr ? atoi(s_usr) : 0;
 
-void *thread_usuario_simulado(void *arg) {
-    SimArgs *a = (SimArgs*)arg;
+    if (produto_id <= 0 || quantidade <= 0) {
+        log_fmt("AUTO", "Usuario #%d | IP:%s | parametros invalidos — container em standby",
+                usuario_id, ip_proprio);
+        while (1) sleep(60);
+    }
 
-    log_fmt("THR", "Usuario #%d: iniciando compra | produto_id=%d qtd=%d",
-            a->usuario_id, a->produto_id, a->quantidade);
+    log_fmt("AUTO", "Usuario #%d | IP:%s | produto_id=%d qtd=%d | conectando a %s:8085...",
+            usuario_id, ip_proprio, produto_id, quantidade, ip_servidor_remoto);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) {
-        log_fmt("THR", "Usuario #%d: ERRO ao criar socket", a->usuario_id);
-        pthread_mutex_lock(&mutex_sim_cont);
-        sim_erros++;
-        pthread_mutex_unlock(&mutex_sim_cont);
-        free(a);
-        return NULL;
+        log_fmt("AUTO", "Usuario #%d | IP:%s | ERRO ao criar socket", usuario_id, ip_proprio);
+        printf("ERRO\n"); fflush(stdout);
+        while (1) sleep(60);
     }
 
-    struct sockaddr_in adr;
-    obter_endereco(&adr);
+    struct sockaddr_in adr; obter_endereco(&adr);
+    char resultado[64] = "ERRO";
 
     if (connect(s, (struct sockaddr*)&adr, sizeof(adr)) == 0) {
-        int req[3] = {2, a->produto_id, a->quantidade};
-        send(s, (char*)req, sizeof(req), 0);
+        /* [V3-4] req[4]: op=2, produto_id, quantidade, usuario_id */
+        int req[4] = {2, produto_id, quantidade, usuario_id};
+        send_completo(s, req, sizeof(req));
 
-        char res[30];
-        memset(res, 0, sizeof(res));
-        int bytes = recv(s, res, 29, 0);
-        if (bytes > 0) res[bytes] = '\0';
+        char res[30]; memset(res, 0, sizeof(res));
+        if (recv_completo(s, res, 30) > 0) {
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            double tempo = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
 
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double tempo = (t1.tv_sec - t0.tv_sec)
-                     + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+            log_fmt("AUTO", "Usuario #%d | IP:%s | resposta='%s' | tempo=%.4fs",
+                    usuario_id, ip_proprio, res, tempo);
 
-        log_fmt("THR", "Usuario #%d: resposta='%s' | produto_id=%d qtd=%d | tempo=%.4fs",
-                a->usuario_id, res, a->produto_id, a->quantidade, tempo);
+            if (strstr(res, "confirmada"))     snprintf(resultado, sizeof(resultado), "CONFIRMADA");
+            else if (strstr(res, "insuficiente")) snprintf(resultado, sizeof(resultado), "RECUSADA");
+            else                                   snprintf(resultado, sizeof(resultado), "ERRO");
 
-        pthread_mutex_lock(&mutex_sim_cont);
-        if      (strstr(res, "confirmada")) sim_confirmadas++;
-        else if (strstr(res, "Erro"))       sim_recusadas++;
-        else                                sim_erros++;
-        pthread_mutex_unlock(&mutex_sim_cont);
+            printf("%s\n", resultado);
+            fflush(stdout);
+        }
     } else {
-        log_fmt("THR", "Usuario #%d: ERRO ao conectar ao servidor", a->usuario_id);
-        pthread_mutex_lock(&mutex_sim_cont);
-        sim_erros++;
-        pthread_mutex_unlock(&mutex_sim_cont);
+        log_fmt("AUTO", "Usuario #%d | IP:%s | ERRO ao conectar a %s:8085",
+                usuario_id, ip_proprio, ip_servidor_remoto);
+        printf("ERRO\n"); fflush(stdout);
     }
 
     close(s);
-    free(a);
-    return NULL;
-}
 
-void executar_simulacao() {
-    int n_usuarios, produto_id, quantidade;
+    log_fmt("AUTO", "Usuario #%d | IP:%s | compra concluida — container em standby",
+            usuario_id, ip_proprio);
+    while (1) sleep(60);
 
-    printf("\n========== MODO SIMULACAO ==========\n");
-    printf(" Numero de usuarios simultaneos : "); scanf("%d", &n_usuarios);
-    printf(" ID do produto a comprar        : "); scanf("%d", &produto_id);
-    printf(" Quantidade por usuario         : "); scanf("%d", &quantidade);
-
-    if (n_usuarios <= 0 || produto_id <= 0 || quantidade <= 0) {
-        printf(" Valores invalidos. Simulacao cancelada.\n");
-        log_evento("SIM", "Simulacao cancelada — valores invalidos informados");
-        return;
-    }
-
-    sim_confirmadas = 0;
-    sim_recusadas   = 0;
-    sim_erros       = 0;
-
-    log_fmt("SIM", "Simulacao iniciada | usuarios=%d produto_id=%d qtd_cada=%d",
-            n_usuarios, produto_id, quantidade);
-
-    pthread_t *threads = malloc(sizeof(pthread_t) * n_usuarios);
-    if (!threads) {
-        log_evento("ERRO", "Falha ao alocar array de threads da simulacao");
-        return;
-    }
-
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-
-    for (int i = 0; i < n_usuarios; i++) {
-        SimArgs *a    = malloc(sizeof(SimArgs));
-        a->usuario_id = i + 1;
-        a->produto_id = produto_id;
-        a->quantidade = quantidade;
-
-        log_fmt("SIM", "Criando thread usuario #%d", i + 1);
-
-        if (pthread_create(&threads[i], NULL, thread_usuario_simulado, a) != 0) {
-            log_fmt("ERRO", "Falha ao criar thread usuario #%d", i + 1);
-            free(a);
-            threads[i] = 0;
-        }
-    }
-
-    for (int i = 0; i < n_usuarios; i++) {
-        if (threads[i]) pthread_join(threads[i], NULL);
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double tempo_total = (t1.tv_sec - t0.tv_sec)
-                       + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-
-    free(threads);
-
-    printf("\n========== RESULTADO DA SIMULACAO ==========\n");
-    printf(" Usuarios    : %d\n",     n_usuarios);
-    printf(" Produto ID  : %d\n",     produto_id);
-    printf(" Qtd/usuario : %d\n",     quantidade);
-    printf(" Confirmadas : %d\n",     sim_confirmadas);
-    printf(" Recusadas   : %d\n",     sim_recusadas);
-    printf(" Erros       : %d\n",     sim_erros);
-    printf(" Tempo total : %.4f s\n", tempo_total);
-    printf("=============================================\n");
-
-    log_fmt("SIM",
-            "Simulacao concluida | usuarios=%d prod=%d qtd=%d "
-            "confirmadas=%d recusadas=%d erros=%d tempo=%.4fs",
-            n_usuarios, produto_id, quantidade,
-            sim_confirmadas, sim_recusadas, sim_erros, tempo_total);
-
-    printf(" Pressione ENTER para continuar...");
-    int c; while ((c = getchar()) != '\n' && c != EOF);
-    getchar();
+    return 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -309,6 +223,8 @@ void executar_simulacao() {
  * ══════════════════════════════════════════════════════════════════════ */
 int main() {
     pid_t pid = getpid();
+    descobrir_ip_proprio(ip_proprio, sizeof(ip_proprio));
+    struct sockaddr_in adr_tmp; obter_endereco(&adr_tmp);
 
     const char *log_dir = getenv("LOG_DIR");
     char nome_log[256];
@@ -316,119 +232,106 @@ int main() {
         snprintf(nome_log, sizeof(nome_log), "%s/cliente_%d.log", log_dir, (int)pid);
     else
         snprintf(nome_log, sizeof(nome_log), "cliente_%d.log", (int)pid);
-
     arq_log = fopen(nome_log, "a");
 
-    log_evento("INIT", "========================================");
-    log_fmt("INIT",    "  CLIENTE INICIADO — PID %d            ", (int)pid);
-    log_evento("INIT", "========================================");
-
-    int modo;
-    system("clear");
-    printf("========== LOJA VIRTUAL — PID %-6d ==========\n", (int)pid);
-    printf("\n Selecione o modo de operacao:\n");
-    printf("  1. Modo Interativo  (navegar e comprar manualmente)\n");
-    printf("  2. Modo Simulacao   (N usuarios simultaneos)\n");
-    printf("  3. Sair\n");
-    printf(" Escolha: ");
-
-    if (scanf("%d", &modo) != 1) modo = 3;
-    log_fmt("INIT", "Modo selecionado: %d", modo);
-
-    if (modo == 2) {
-        executar_simulacao();
+    /* Modo automatico */
+    const char *modo_auto = getenv("MODO_AUTO");
+    if (modo_auto && strcmp(modo_auto, "1") == 0) {
+        log_evento("INIT", "========================================");
+        log_fmt   ("INIT", "  CLIENTE AUTO — IP: %s", ip_proprio);
+        log_fmt   ("INIT", "  SERVIDOR: %s:8085", ip_servidor_remoto);
+        log_fmt   ("INIT", "  PID: %d", (int)pid);
+        log_evento("INIT", "========================================");
+        int r = modo_automatico();
         if (arq_log) fclose(arq_log);
-        return 0;
+        return r;
     }
 
-    if (modo != 1) {
-        log_evento("INIT", "Cliente encerrado pelo usuario");
-        if (arq_log) fclose(arq_log);
-        return 0;
-    }
+    /* Modo interativo */
+    log_evento("INIT", "========================================");
+    log_fmt   ("INIT", "  CLIENTE INICIADO — IP: %s", ip_proprio);
+    log_fmt   ("INIT", "  SERVIDOR: %s:8085", ip_servidor_remoto);
+    log_fmt   ("INIT", "  PID: %d", (int)pid);
+    log_evento("INIT", "========================================");
 
-    /* ── MODO INTERATIVO (comportamento original intacto) ─────────── */
     Produto lista[100];
     int total = 0, idx = 0, op;
 
     while (1) {
         buscar_estoque(lista, &total);
-
         if (total > 0 && idx >= total) idx = total - 1;
         if (total == 0) idx = 0;
 
-        system("clear");
-        printf("========== LOJA VIRTUAL — PID %-6d ==========\n", (int)pid);
-
-        if (total > 0) {
-            printf(" PRODUTO  : [%03d] %s\n",  lista[idx].id, lista[idx].nome);
-            printf(" CATEGORIA: %s\n",          lista[idx].category);
-            printf(" PRECO    : R$ %.2f | ESTOQUE: %d\n",
-                   lista[idx].preco, lista[idx].qtd);
-            printf("-----------------------------------------------\n");
-            printf(" Exibindo %d de %d\n", idx + 1, total);
-        } else {
-            printf("\n >>> SEM PRODUTOS NO SERVIDOR <<<\n");
-        }
-
-        printf("\n 1. Comprar\n 2. Proximo\n 3. Anterior\n 4. Sair\n Escolha: ");
-
-        if (scanf("%d", &op) != 1) {
-            int c; while ((c = getchar()) != '\n' && c != EOF);
+        /* Se nao ha produtos, aguarda 2s e tenta novamente automaticamente */
+        if (total == 0) {
+            printf("\n===== LOJA VIRTUAL | IP: %-15s PID: %-6d =====\n", ip_proprio, (int)pid);
+            printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+            printf("------------------------------------------------------\n");
+            printf("\n >>> SEM PRODUTOS NO SERVIDOR — tentando novamente em 2s... <<<\n");
+            fflush(stdout);
+            sleep(2);
             continue;
         }
 
-        if (op == 1 && total > 0) {
-            int q;
-            printf(" Quantidade desejada: "); scanf("%d", &q);
+        printf("\n===== LOJA VIRTUAL | IP: %-15s PID: %-6d =====\n", ip_proprio, (int)pid);
+        printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+        printf("------------------------------------------------------\n");
+        printf(" PRODUTO  : [%03d] %s\n",  lista[idx].id, lista[idx].nome);
+        printf(" CATEGORIA: %s\n",          lista[idx].category);
+        printf(" PRECO    : R$ %.2f | ESTOQUE: %d\n", lista[idx].preco, lista[idx].qtd);
+        printf("------------------------------------------------------\n");
+        printf(" Exibindo %d de %d\n", idx + 1, total);
 
-            log_fmt("BUY", "Tentativa de compra | id=%d nome='%s' qtd=%d",
-                    lista[idx].id, lista[idx].nome, q);
+        printf("\n 1. Comprar\n 2. Proximo\n 3. Anterior\n 4. Sair\n Escolha: ");
+        fflush(stdout);
+
+        char linha[32]; op = 0;
+        if (fgets(linha, sizeof(linha), stdin)) op = atoi(linha);
+
+        if (op == 1 && total > 0) {
+            int q = 0;
+            do {
+                printf(" Quantidade desejada (> 0): "); fflush(stdout);
+                char qlinha[32];
+                if (fgets(qlinha, sizeof(qlinha), stdin)) q = atoi(qlinha);
+                if (q <= 0)
+                    printf(" Quantidade invalida. Digite um numero maior que 0.\n");
+            } while (q <= 0);
+
+            log_fmt("BUY", "Tentativa | cliente=%s -> servidor=%s | id=%d nome='%s' qtd=%d",
+                    ip_proprio, ip_servidor_remoto, lista[idx].id, lista[idx].nome, q);
 
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
 
             int s = socket(AF_INET, SOCK_STREAM, 0);
-            struct sockaddr_in adr2;
-            obter_endereco(&adr2);
+            struct sockaddr_in adr2; obter_endereco(&adr2);
 
             if (connect(s, (struct sockaddr*)&adr2, sizeof(adr2)) == 0) {
-                int req[3] = {2, lista[idx].id, q};
-                send(s, (char*)req, sizeof(req), 0);
+                /* Modo interativo: usuario_id = 0 (nao e simulacao) */
+                int req[4] = {2, lista[idx].id, q, 0};
+                send_completo(s, req, sizeof(req));
 
-                char res[30];
-                memset(res, 0, sizeof(res));
-                int bytes = recv(s, res, 29, 0);
-                if (bytes > 0) res[bytes] = '\0';
-
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                double tempo = (t1.tv_sec - t0.tv_sec)
-                             + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-
-                printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4f segundos\n", res, tempo);
-                log_fmt("BUY",
-                        "Resposta: '%s' | id=%d | qtd=%d | tempo=%.4fs",
-                        res, lista[idx].id, q, tempo);
+                char res[30]; memset(res, 0, sizeof(res));
+                if (recv_completo(s, res, 30) > 0) {
+                    clock_gettime(CLOCK_MONOTONIC, &t1);
+                    double tempo = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+                    printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4f segundos\n", res, tempo);
+                    log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
+                            ip_proprio, res, lista[idx].id, q, tempo);
+                }
             } else {
-                log_evento("ERRO", "Falha ao conectar para compra");
+                log_fmt("ERRO", "Falha ao conectar | cliente=%s -> servidor=%s",
+                        ip_proprio, ip_servidor_remoto);
             }
-
             close(s);
-
-            printf(" Pressione ENTER para continuar...");
-            int c; while ((c = getchar()) != '\n' && c != EOF);
-            getchar();
+            printf(" Pressione ENTER para continuar..."); fflush(stdout);
+            char tmp[8]; fgets(tmp, sizeof(tmp), stdin);
         }
-        else if (op == 2 && idx < total - 1) {
-            idx++;
-            log_fmt("NAV", "Navegando para produto %d (idx=%d)", idx + 1, idx);
-        }
-        else if (op == 3 && idx > 0) {
-            idx--;
-            log_fmt("NAV", "Navegando para produto %d (idx=%d)", idx + 1, idx);
-        }
+        else if (op == 2 && idx < total - 1) { idx++; }
+        else if (op == 3 && idx > 0)         { idx--; }
         else if (op == 4) {
-            log_evento("INIT", "Cliente encerrado pelo usuario");
+            log_fmt("INIT", "Cliente encerrado | IP: %s", ip_proprio);
             break;
         }
     }
