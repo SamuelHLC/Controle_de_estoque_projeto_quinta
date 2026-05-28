@@ -1,4 +1,4 @@
-# Projeto Integrador: Controle de Estoque Distribuído (V10.0)
+# Projeto Integrador: Controle de Estoque Distribuído 
 
 Este projeto é um sistema de gestão de estoque desenvolvido em **Linguagem C**, com **Arquitetura Distribuída Real** baseada no modelo Cliente-Servidor via **Sockets TCP/IP POSIX**, rodando em containers Docker isolados que simulam múltiplas máquinas se comunicando em rede.
 
@@ -116,7 +116,7 @@ Controle_de_estoque_projeto_quinta/
 
 ### Passo 1 — Abra a pasta do projeto no VSCode
 
-Abra o VSCode, vá em `File > Open Folder` e selecione a pasta `Controle_de_estoque_projeto_quinta`.
+Abra o VSCode,  e selecione a pasta com os arquivos .
 
 Em seguida abra o terminal integrado:
 
