@@ -1,0 +1,135 @@
+# ══════════════════════════════════════════════════════════════════════
+#  docker-compose.yml — Sistema Distribuído de Estoque
+#
+#  Serviços:
+#    servidor-estoque  — núcleo concorrente (mutex + semáforo POSIX)
+#    cliente-pdv       — interface de compras (sobe manualmente)
+#    admin-painel      — CRUD de estoque via socket TCP
+#
+#  Simulação distribuída real:
+#    Use o script simular.ps1 (Windows) ou simular.sh (Linux/Mac).
+#    Os containers de usuario NAO sao removidos ao terminar — ficam
+#    em standby no Docker para o professor inspecionar com:
+#      docker ps
+#      docker logs <container_id>
+#      docker inspect <container_id> | grep IPAddress
+#
+#  Comandos principais:
+#    docker compose up --build           → sobe o servidor
+#    docker compose run --rm cliente-pdv → abre cliente interativo
+#    docker compose run --rm admin-painel → abre painel admin
+#    ./simular.ps1                        → simulação distribuída
+#    docker compose down                  → encerra tudo
+# ══════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Servidor: núcleo de processamento distribuído ────────────────────
+  servidor-estoque:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: estoque/app:latest
+    container_name: servidor-estoque
+    command: /app/build/servidor
+
+    networks:
+      - rede-estoque
+
+    volumes:
+      - ./logs:/logs
+      - dados-estoque:/app/data
+
+    working_dir: /app/data
+
+    environment:
+      SERVIDOR_HOST: "0.0.0.0"
+      SERVIDOR_PORT: "8085"
+      LOG_DIR: "/logs"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep servidor > /dev/null && echo ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  # ── Cliente PDV ───────────────────────────────────────────────────────
+  # Modo interativo:
+  #   docker compose run --rm cliente-pdv
+  #
+  # Modo automatico (usado pelo simular.ps1 / simular.sh):
+  #   Os containers NAO usam --rm: ficam rodando apos a compra.
+  #   Cada container tem IP proprio visivel em:
+  #     docker inspect <id> | grep IPAddress
+  #   Para encerrar todos os containers de simulacao:
+  #     docker compose stop
+  #
+  # O profile "manual" impede subida automatica com docker compose up.
+  cliente-pdv:
+    image: estoque/app:latest
+    command: /app/build/cliente
+    profiles: ["manual"]
+
+    networks:
+      - rede-estoque
+
+    volumes:
+      - ./logs:/logs
+
+    environment:
+      SERVIDOR_HOST: "servidor-estoque"
+      SERVIDOR_PORT: "8085"
+      LOG_DIR: "/logs"
+      # MODO_AUTO, PRODUTO_ID, QUANTIDADE, USUARIO_ID injetados
+      # dinamicamente pelo simular.ps1 via -e na linha de comando
+
+    depends_on:
+      servidor-estoque:
+        condition: service_healthy
+
+    stdin_open: true
+    tty: true
+
+  # ── Admin: painel de CRUD ─────────────────────────────────────────────
+  admin-painel:
+    image: estoque/app:latest
+    command: /app/build/admin
+    profiles: ["manual"]
+
+    networks:
+      - rede-estoque
+
+    volumes:
+      - ./logs:/logs
+      - dados-estoque:/app/data
+
+    working_dir: /app/data
+
+    environment:
+      SERVIDOR_HOST: "servidor-estoque"
+      SERVIDOR_PORT: "8085"
+      LOG_DIR: "/logs"
+
+    depends_on:
+      servidor-estoque:
+        condition: service_healthy
+
+    stdin_open: true
+    tty: true
+
+    restart: "no"
+
+# ── Rede interna isolada ────────────────────────────────────────────────
+networks:
+  rede-estoque:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+# ── Volumes ─────────────────────────────────────────────────────────────
+volumes:
+  dados-estoque:
