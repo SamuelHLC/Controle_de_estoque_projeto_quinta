@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'SilentlyContinue'
 $dir = (Get-Location).Path
 
 function Get-ClientesAtivos {
@@ -189,6 +189,16 @@ function Subir-Simulacao {
             $lq = Read-Host
             if (-not [int]::TryParse($lq, [ref]$qtdVal) -or $qtdVal -le 0) {
                 Write-Host ($prefixo + 'Quantidade invalida.') -ForegroundColor Red; $qtdVal = 0
+            } elseif ($qtdVal -gt $prodEscolhido.Qtd) {
+                Write-Host ($prefixo + 'Quantidade maior que o estoque disponivel (' + $prodEscolhido.Qtd + ').') -ForegroundColor Yellow
+                Write-Host -NoNewline ($prefixo + 'Deseja comprar ' + $prodEscolhido.Qtd + ' unidade(s) disponivel(is)? (S/N): ')
+                $resp = Read-Host
+                if ($resp -match '^[Ss]$') {
+                    $qtdVal = $prodEscolhido.Qtd
+                } else {
+                    Write-Host ($prefixo + 'Compra cancelada. Digite uma nova quantidade.') -ForegroundColor Red
+                    $qtdVal = 0
+                }
             }
         }
 
