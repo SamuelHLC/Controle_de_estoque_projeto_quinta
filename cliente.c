@@ -281,6 +281,18 @@ int main() {
     Produto todos[100]; int total_todos = 0;
     buscar_estoque(todos, &total_todos);
 
+    /* Se nao ha produtos, aguarda e tenta novamente */
+    while (total_todos == 0) {
+        printf("\n===== LOJA VIRTUAL | IP: %-15s =====\n", ip_proprio);
+        printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+        printf("------------------------------------------------------\n");
+        printf("\n >>> NENHUM PRODUTO CADASTRADO NO SERVIDOR <<<\n");
+        printf(" Cadastre produtos pelo admin e pressione ENTER para tentar novamente...");
+        fflush(stdout);
+        char tmp[8]; fgets(tmp, sizeof(tmp), stdin);
+        buscar_estoque(todos, &total_todos);
+    }
+
     while (strlen(categoria_sel) == 0) {
         printf("\n===== LOJA VIRTUAL | IP: %-15s =====\n", ip_proprio);
         printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
@@ -410,9 +422,35 @@ int main() {
                 if (recv_completo(s, res, 30) > 0) {
                     clock_gettime(CLOCK_MONOTONIC, &t1);
                     double tempo = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-                    printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4f segundos\n", res, tempo);
-                    log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
-                            ip_proprio, res, lista[idx].id, q, tempo);
+
+                    if (strstr(res, "insuficiente") && lista[idx].qtd > 0) {
+                        printf("\n STATUS: %s\n", res);
+                        printf(" Estoque disponivel: %d unidade(s).\n", lista[idx].qtd);
+                        printf(" Deseja comprar %d unidade(s)? (S/N): ", lista[idx].qtd);
+                        fflush(stdout);
+                        char op_qtd[8]; fgets(op_qtd, sizeof(op_qtd), stdin);
+                        if (op_qtd[0] == 'S' || op_qtd[0] == 's') {
+                            int s2 = socket(AF_INET, SOCK_STREAM, 0);
+                            struct sockaddr_in adr3; obter_endereco(&adr3);
+                            if (connect(s2, (struct sockaddr*)&adr3, sizeof(adr3)) == 0) {
+                                int req2[4] = {2, lista[idx].id, lista[idx].qtd, 0};
+                                send_completo(s2, req2, sizeof(req2));
+                                char res2[30]; memset(res2, 0, sizeof(res2));
+                                if (recv_completo(s2, res2, 30) > 0) {
+                                    printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4fs\n", res2, tempo);
+                                    log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
+                                            ip_proprio, res2, lista[idx].id, lista[idx].qtd, tempo);
+                                }
+                            }
+                            close(s2);
+                        } else {
+                            printf(" Compra cancelada.\n");
+                        }
+                    } else {
+                        printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4f segundos\n", res, tempo);
+                        log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
+                                ip_proprio, res, lista[idx].id, q, tempo);
+                    }
                 }
             } else {
                 log_fmt("ERRO", "Falha ao conectar | cliente=%s -> servidor=%s",
