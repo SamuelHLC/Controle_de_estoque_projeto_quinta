@@ -234,6 +234,18 @@ int main() {
         snprintf(nome_log, sizeof(nome_log), "cliente_%d.log", (int)pid);
     arq_log = fopen(nome_log, "a");
 
+    /* Modo listar — retorna produtos em formato CSV para o simular.ps1 */
+    const char *modo_listar = getenv("MODO_LISTAR");
+    if (modo_listar && strcmp(modo_listar, "1") == 0) {
+        Produto l[100]; int t = 0;
+        buscar_estoque(l, &t);
+        for (int i = 0; i < t; i++)
+            printf("%d|%s|%s|%.2f|%d\n", l[i].id, l[i].nome, l[i].category, l[i].preco, l[i].qtd);
+        fflush(stdout);
+        if (arq_log) fclose(arq_log);
+        return 0;
+    }
+
     /* Modo automatico */
     const char *modo_auto = getenv("MODO_AUTO");
     if (modo_auto && strcmp(modo_auto, "1") == 0) {
@@ -256,39 +268,134 @@ int main() {
 
     Produto lista[100];
     int total = 0, idx = 0, op;
+    int precisa_atualizar = 1;
+    char categoria_sel[30] = "";
+
+    static const char *CATEGORIAS[] = {
+        "Eletronicos", "Informatica", "Eletrodomesticos", "Moveis",
+        "Vestuario", "Alimentos", "Brinquedos", "Ferramentas", "Livros", "Outros"
+    };
+    #define NUM_CAT 10
+
+    /* Selecao de categoria ao entrar */
+    Produto todos[100]; int total_todos = 0;
+    buscar_estoque(todos, &total_todos);
+
+    /* Se nao ha produtos, aguarda e tenta novamente */
+    while (total_todos == 0) {
+        printf("\n===== LOJA VIRTUAL | IP: %-15s =====\n", ip_proprio);
+        printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+        printf("------------------------------------------------------\n");
+        printf("\n >>> NENHUM PRODUTO CADASTRADO NO SERVIDOR <<<\n");
+        printf(" Cadastre produtos pelo admin e pressione ENTER para tentar novamente...");
+        fflush(stdout);
+        char tmp[8]; fgets(tmp, sizeof(tmp), stdin);
+        buscar_estoque(todos, &total_todos);
+    }
+
+    while (strlen(categoria_sel) == 0) {
+        printf("\n===== LOJA VIRTUAL | IP: %-15s =====\n", ip_proprio);
+        printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+        printf("------------------------------------------------------\n");
+        printf(" Selecione uma categoria:\n\n");
+        for (int i = 0; i < NUM_CAT; i++) {
+            int qtd_cat = 0;
+            for (int j = 0; j < total_todos; j++)
+                if (strcmp(todos[j].category, CATEGORIAS[i]) == 0) qtd_cat++;
+            if (qtd_cat > 0)
+                printf("  %2d. %s (%d produto(s))\n", i + 1, CATEGORIAS[i], qtd_cat);
+            else
+                printf("  %2d. \033[90m%s (sem produtos)\033[0m\n", i + 1, CATEGORIAS[i]);
+        }
+        printf("\n Escolha (1-%d): ", NUM_CAT);
+        fflush(stdout);
+        char clinha[32]; int csel = 0;
+        if (fgets(clinha, sizeof(clinha), stdin)) csel = atoi(clinha);
+        if (csel >= 1 && csel <= NUM_CAT) {
+            int qtd_cat = 0;
+            for (int j = 0; j < total_todos; j++)
+                if (strcmp(todos[j].category, CATEGORIAS[csel - 1]) == 0) qtd_cat++;
+            if (qtd_cat == 0)
+                printf(" Esta categoria nao tem produtos. Escolha outra.\n");
+            else
+                strncpy(categoria_sel, CATEGORIAS[csel - 1], sizeof(categoria_sel) - 1);
+        } else {
+            printf(" Opcao invalida. Escolha entre 1 e %d.\n", NUM_CAT);
+        }
+    }
+    log_fmt("INIT", "Categoria selecionada: %s | cliente=%s", categoria_sel, ip_proprio);
 
     while (1) {
-        buscar_estoque(lista, &total);
-        if (total > 0 && idx >= total) idx = total - 1;
-        if (total == 0) idx = 0;
+        if (precisa_atualizar) {
+            buscar_estoque(lista, &total);
+            /* Filtra por categoria selecionada */
+            Produto filtrado[100]; int total_filtrado = 0;
+            for (int i = 0; i < total; i++)
+                if (strcmp(lista[i].category, categoria_sel) == 0)
+                    filtrado[total_filtrado++] = lista[i];
+            total = total_filtrado;
+            for (int i = 0; i < total; i++) lista[i] = filtrado[i];
+            if (total > 0 && idx >= total) idx = total - 1;
+            if (total == 0) idx = 0;
+            precisa_atualizar = 0;
+        }
 
-        /* Se nao ha produtos, aguarda 2s e tenta novamente automaticamente */
         if (total == 0) {
             printf("\n===== LOJA VIRTUAL | IP: %-15s PID: %-6d =====\n", ip_proprio, (int)pid);
-            printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+            printf(" SERVIDOR: %s:8085 | CATEGORIA: %s\n", ip_servidor_remoto, categoria_sel);
             printf("------------------------------------------------------\n");
-            printf("\n >>> SEM PRODUTOS NO SERVIDOR — tentando novamente em 2s... <<<\n");
+            printf("\n >>> SEM PRODUTOS NESTA CATEGORIA <<<\n");
+            printf("\n 1. Trocar Categoria\n 2. Sair\n Escolha: ");
             fflush(stdout);
-            sleep(2);
+            char vl[32]; int vop = 0;
+            if (fgets(vl, sizeof(vl), stdin)) vop = atoi(vl);
+            if (vop == 1) {
+                memset(categoria_sel, 0, sizeof(categoria_sel));
+                while (strlen(categoria_sel) == 0) {
+                    printf("\n Selecione uma categoria:\n\n");
+                    for (int i = 0; i < NUM_CAT; i++)
+                        printf("  %2d. %s\n", i + 1, CATEGORIAS[i]);
+                    printf("\n Escolha (1-%d): ", NUM_CAT);
+                    fflush(stdout);
+                    char clinha[32]; int csel = 0;
+                    if (fgets(clinha, sizeof(clinha), stdin)) csel = atoi(clinha);
+                    if (csel >= 1 && csel <= NUM_CAT)
+                        strncpy(categoria_sel, CATEGORIAS[csel - 1], sizeof(categoria_sel) - 1);
+                    else
+                        printf(" Opcao invalida.\n");
+                }
+                precisa_atualizar = 1;
+            } else {
+                log_fmt("INIT", "Cliente encerrado | IP: %s", ip_proprio);
+                break;
+            }
             continue;
         }
 
         printf("\n===== LOJA VIRTUAL | IP: %-15s PID: %-6d =====\n", ip_proprio, (int)pid);
-        printf(" SERVIDOR: %s:8085\n", ip_servidor_remoto);
+        printf(" SERVIDOR: %s:8085 | CATEGORIA: %s\n", ip_servidor_remoto, categoria_sel);
         printf("------------------------------------------------------\n");
         printf(" PRODUTO  : [%03d] %s\n",  lista[idx].id, lista[idx].nome);
         printf(" CATEGORIA: %s\n",          lista[idx].category);
-        printf(" PRECO    : R$ %.2f | ESTOQUE: %d\n", lista[idx].preco, lista[idx].qtd);
+        if (lista[idx].qtd > 0)
+            printf(" PRECO    : R$ %.2f | ESTOQUE: %d\n", lista[idx].preco, lista[idx].qtd);
+        else
+            printf(" PRECO    : R$ %.2f | ESTOQUE: 0 — INDISPONIVEL\n", lista[idx].preco);
         printf("------------------------------------------------------\n");
         printf(" Exibindo %d de %d\n", idx + 1, total);
 
-        printf("\n 1. Comprar\n 2. Proximo\n 3. Anterior\n 4. Sair\n Escolha: ");
+        printf("\n 1. Comprar\n 2. Proximo\n 3. Anterior\n 4. Trocar Categoria\n 5. Sair\n Escolha: ");
         fflush(stdout);
 
         char linha[32]; op = 0;
         if (fgets(linha, sizeof(linha), stdin)) op = atoi(linha);
 
         if (op == 1 && total > 0) {
+            if (lista[idx].qtd == 0) {
+                printf(" Produto indisponivel — estoque zerado.\n");
+                printf(" Pressione ENTER para continuar..."); fflush(stdout);
+                char tmp[8]; fgets(tmp, sizeof(tmp), stdin);
+            } else {
             int q = 0;
             do {
                 printf(" Quantidade desejada (> 0): "); fflush(stdout);
@@ -308,7 +415,6 @@ int main() {
             struct sockaddr_in adr2; obter_endereco(&adr2);
 
             if (connect(s, (struct sockaddr*)&adr2, sizeof(adr2)) == 0) {
-                /* Modo interativo: usuario_id = 0 (nao e simulacao) */
                 int req[4] = {2, lista[idx].id, q, 0};
                 send_completo(s, req, sizeof(req));
 
@@ -316,9 +422,35 @@ int main() {
                 if (recv_completo(s, res, 30) > 0) {
                     clock_gettime(CLOCK_MONOTONIC, &t1);
                     double tempo = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-                    printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4f segundos\n", res, tempo);
-                    log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
-                            ip_proprio, res, lista[idx].id, q, tempo);
+
+                    if (strstr(res, "insuficiente") && lista[idx].qtd > 0) {
+                        printf("\n STATUS: %s\n", res);
+                        printf(" Estoque disponivel: %d unidade(s).\n", lista[idx].qtd);
+                        printf(" Deseja comprar %d unidade(s)? (S/N): ", lista[idx].qtd);
+                        fflush(stdout);
+                        char op_qtd[8]; fgets(op_qtd, sizeof(op_qtd), stdin);
+                        if (op_qtd[0] == 'S' || op_qtd[0] == 's') {
+                            int s2 = socket(AF_INET, SOCK_STREAM, 0);
+                            struct sockaddr_in adr3; obter_endereco(&adr3);
+                            if (connect(s2, (struct sockaddr*)&adr3, sizeof(adr3)) == 0) {
+                                int req2[4] = {2, lista[idx].id, lista[idx].qtd, 0};
+                                send_completo(s2, req2, sizeof(req2));
+                                char res2[30]; memset(res2, 0, sizeof(res2));
+                                if (recv_completo(s2, res2, 30) > 0) {
+                                    printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4fs\n", res2, tempo);
+                                    log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
+                                            ip_proprio, res2, lista[idx].id, lista[idx].qtd, tempo);
+                                }
+                            }
+                            close(s2);
+                        } else {
+                            printf(" Compra cancelada.\n");
+                        }
+                    } else {
+                        printf("\n STATUS: %s\n TEMPO DE RESPOSTA: %.4f segundos\n", res, tempo);
+                        log_fmt("BUY", "Resposta | cliente=%s | '%s' | id=%d qtd=%d tempo=%.4fs",
+                                ip_proprio, res, lista[idx].id, q, tempo);
+                    }
                 }
             } else {
                 log_fmt("ERRO", "Falha ao conectar | cliente=%s -> servidor=%s",
@@ -327,10 +459,46 @@ int main() {
             close(s);
             printf(" Pressione ENTER para continuar..."); fflush(stdout);
             char tmp[8]; fgets(tmp, sizeof(tmp), stdin);
+            precisa_atualizar = 1;
+            } /* fecha else do estoque > 0 */
         }
         else if (op == 2 && idx < total - 1) { idx++; }
         else if (op == 3 && idx > 0)         { idx--; }
         else if (op == 4) {
+            memset(categoria_sel, 0, sizeof(categoria_sel));
+            buscar_estoque(todos, &total_todos);
+            while (strlen(categoria_sel) == 0) {
+                printf("\n Selecione uma categoria:\n\n");
+                for (int i = 0; i < NUM_CAT; i++) {
+                    int qtd_cat = 0;
+                    for (int j = 0; j < total_todos; j++)
+                        if (strcmp(todos[j].category, CATEGORIAS[i]) == 0) qtd_cat++;
+                    if (qtd_cat > 0)
+                        printf("  %2d. %s (%d produto(s))\n", i + 1, CATEGORIAS[i], qtd_cat);
+                    else
+                        printf("  %2d. \033[90m%s (sem produtos)\033[0m\n", i + 1, CATEGORIAS[i]);
+                }
+                printf("\n Escolha (1-%d): ", NUM_CAT);
+                fflush(stdout);
+                char clinha[32]; int csel = 0;
+                if (fgets(clinha, sizeof(clinha), stdin)) csel = atoi(clinha);
+                if (csel >= 1 && csel <= NUM_CAT) {
+                    int qtd_cat = 0;
+                    for (int j = 0; j < total_todos; j++)
+                        if (strcmp(todos[j].category, CATEGORIAS[csel - 1]) == 0) qtd_cat++;
+                    if (qtd_cat == 0)
+                        printf(" Esta categoria nao tem produtos. Escolha outra.\n");
+                    else
+                        strncpy(categoria_sel, CATEGORIAS[csel - 1], sizeof(categoria_sel) - 1);
+                } else {
+                    printf(" Opcao invalida.\n");
+                }
+            }
+            idx = 0;
+            precisa_atualizar = 1;
+            log_fmt("INIT", "Categoria alterada para: %s | cliente=%s", categoria_sel, ip_proprio);
+        }
+        else if (op == 5) {
             log_fmt("INIT", "Cliente encerrado | IP: %s", ip_proprio);
             break;
         }

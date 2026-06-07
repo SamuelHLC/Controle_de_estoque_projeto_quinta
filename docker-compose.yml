@@ -96,7 +96,6 @@ services:
   # ── Admin: painel de CRUD ─────────────────────────────────────────────
   admin-painel:
     image: estoque/app:latest
-    container_name: admin-painel
     command: /app/build/admin
     profiles: ["manual"]
 

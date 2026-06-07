@@ -270,7 +270,7 @@ int main() {
     log_fmt   ("INIT", "  SERVIDOR ALVO: %s:8085", ip_servidor_remoto);
     log_evento("INIT", "========================================");
 
-    int op, idx = 0;
+    int op;
 
     do {
         buscar_lista();
@@ -282,14 +282,13 @@ int main() {
         printf("  SERVIDOR: %-15s:8085             \n", ip_servidor_remoto);
         printf("==================================================\n");
 
-        int fim = (idx + 5 > total) ? total : idx + 5;
         if (total > 0) {
-            for (int i = idx; i < fim; i++) {
+            for (int i = 0; i < total; i++) {
                 printf(" [%d] ID: %03d | %-20s | %-18s | R$ %7.2f | Est: %d\n",
                        i + 1, lista[i].id, lista[i].nome,
                        lista[i].category, lista[i].preco, lista[i].qtd);
             }
-            printf("\n EXIBINDO: %d-%d de %d\n", idx + 1, fim, total);
+            printf("\n TOTAL: %d produto(s)\n", total);
         } else {
             printf(" >>> ESTOQUE VAZIO - CADASTRE UM PRODUTO <<<\n");
         }
@@ -300,8 +299,7 @@ int main() {
         printf(" 3. Alterar Preco\n");
         printf(" 4. Adicionar Unidades\n");
         printf(" 5. Remover Produto\n");
-        printf(" 6. Proxima Pagina\n");
-        printf(" 7. Pagina Anterior\n");
+        printf(" 6. Atualizar\n");
         printf(" 0. Sair\n");
         printf(" Escolha: ");
 
@@ -311,9 +309,9 @@ int main() {
         }
         { int c; while ((c = getchar()) != '\n' && c != EOF); }
 
-        /* [V3-6] Opcao invalida: avisa e nao gera nenhuma conexao */
+        /* Opcao invalida */
         if (op != 0 && op != 1 && op != 2 && op != 3 &&
-            op != 4 && op != 5 && op != 6 && op != 7) {
+            op != 4 && op != 5 && op != 6) {
             printf(" Opcao invalida! Use as opcoes do menu.\n");
             log_fmt("WARN", "Opcao invalida digitada: %d — sem conexao ao servidor", op);
             pausar();
@@ -322,16 +320,16 @@ int main() {
 
         int sel = -1;
         if (op >= 2 && op <= 5 && total > 0) {
-            printf(" Selecione o numero do item ([%d-%d]): ", idx + 1, fim);
+            printf(" Selecione o numero do item ([1-%d]): ", total);
             if (scanf("%d", &sel) != 1) {
                 int c; while ((c = getchar()) != '\n' && c != EOF);
                 sel = -1;
             } else {
                 int c; while ((c = getchar()) != '\n' && c != EOF);
-                sel--;  /* converte para indice base-0 */
+                sel--;
             }
-            if (sel < idx || sel >= fim) {
-                printf(" Selecao fora do intervalo exibido.\n");
+            if (sel < 0 || sel >= total) {
+                printf(" Selecao invalida.\n");
                 pausar();
                 continue;
             }
@@ -471,9 +469,10 @@ int main() {
                     pausar();
                 } break;
 
-            /* ── Paginacao ────────────────────────────────────────── */
-            case 6: if (idx + 5 < total) idx += 5; break;
-            case 7: if (idx - 5 >= 0)    idx -= 5; break;
+            /* ── Atualizar ────────────────────────────────────────── */
+            case 6:
+                log_fmt("ADMIN", "Lista atualizada manualmente | admin=%s", ip_proprio);
+                break;
         }
 
     } while (op != 0);

@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'SilentlyContinue'
 $dir = (Get-Location).Path
 
 function Get-ClientesAtivos {
@@ -18,6 +18,38 @@ function Get-ClientesAtivos {
         }
     }
     return $resultado
+}
+
+function Buscar-Produtos {
+    $produtos = @()
+    try {
+        $linhas = docker compose run `
+            --rm `
+            --no-deps `
+            -e MODO_LISTAR=1 `
+            -e SERVIDOR_HOST=servidor-estoque `
+            -e SERVIDOR_PORT=8085 `
+            cliente-pdv 2>$null
+
+        foreach ($linha in $linhas) {
+            $linha = $linha.Trim()
+            if ($linha -match '^\d+\|') {
+                $p = $linha -split '\|'
+                if ($p.Count -ge 5) {
+                    $produtos += [PSCustomObject]@{
+                        Id        = [int]$p[0]
+                        Nome      = $p[1]
+                        Categoria = $p[2]
+                        Preco     = [float]$p[3]
+                        Qtd       = [int]$p[4]
+                    }
+                }
+            }
+        }
+    } catch {
+        # Falha silenciosa
+    }
+    return $produtos
 }
 
 function Mostrar-Menu {
@@ -56,6 +88,123 @@ function Subir-Simulacao {
         return
     }
 
+    $categorias = @('Eletronicos','Informatica','Eletrodomesticos','Moveis','Vestuario','Alimentos','Brinquedos','Ferramentas','Livros','Outros')
+
+    # Verifica e sobe servidor se necessario
+    $servidorRodando = docker ps --filter "name=servidor-estoque" --filter "status=running" -q 2>$null
+    if (-not $servidorRodando) {
+        Write-Host ' Servidor nao esta rodando. Subindo servidor...' -ForegroundColor Yellow
+        docker compose up -d servidor-estoque 2>$null | Out-Null
+        $tent = 0
+        do {
+            Start-Sleep -Seconds 2
+            $servidorRodando = docker ps --filter "name=servidor-estoque" --filter "status=running" -q 2>$null
+            $tent++
+        } while (-not $servidorRodando -and $tent -lt 10)
+        if (-not $servidorRodando) {
+            Write-Host ' ERRO: Nao foi possivel subir o servidor.' -ForegroundColor Red
+            Write-Host ' Execute manualmente: docker compose up --build' -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
+            return
+        }
+        Write-Host ' Servidor pronto.' -ForegroundColor Green
+        Start-Sleep -Seconds 1
+    }
+
+    # Busca produtos do servidor
+    Write-Host ''
+    Write-Host ' Buscando produtos do servidor...'
+    $todosProdutos = Buscar-Produtos
+    if ($todosProdutos.Count -eq 0) {
+        Write-Host ' ERRO: Nenhum produto cadastrado no servidor.' -ForegroundColor Red
+        Write-Host ' Cadastre produtos pelo admin antes de simular.'
+        Start-Sleep -Seconds 2
+        return
+    }
+    Write-Host (' ' + $todosProdutos.Count + ' produto(s) encontrado(s).') -ForegroundColor Green
+
+    # Funcao interna para selecionar categoria e produto
+    $selecionarProduto = {
+        param($prefixo)
+
+        $catSel = ''; $produtosSel = @()
+
+        while ($true) {
+            Write-Host ''
+            Write-Host ($prefixo + 'Categorias disponiveis:')
+            for ($ci = 0; $ci -lt $categorias.Count; $ci++) {
+                $cat = $categorias[$ci]
+                $prods = @($todosProdutos | Where-Object { $_.Categoria -eq $cat })
+                if ($prods.Count -gt 0) {
+                    Write-Host ($prefixo + '  ' + ($ci+1) + '. ' + $cat + ' (' + $prods.Count + ' produto(s))')
+                } else {
+                    Write-Host ($prefixo + '  ' + ($ci+1) + '. ' + $cat + ' (sem produtos)') -ForegroundColor DarkGray
+                }
+            }
+            Write-Host -NoNewline ($prefixo + 'Categoria (1-10): ')
+            $lc = Read-Host; $cIdx = 0
+            if (-not ([int]::TryParse($lc, [ref]$cIdx)) -or $cIdx -lt 1 -or $cIdx -gt 10) {
+                Write-Host ($prefixo + 'Categoria invalida.') -ForegroundColor Red; continue
+            }
+            $catSel = $categorias[$cIdx - 1]
+            $produtosSel = @($todosProdutos | Where-Object { $_.Categoria -eq $catSel })
+            if ($produtosSel.Count -eq 0) {
+                Write-Host ($prefixo + 'Nenhum produto em "' + $catSel + '". Escolha outra categoria.') -ForegroundColor Yellow; continue
+            }
+            break
+        }
+
+        Write-Host ''
+        Write-Host ($prefixo + 'Produtos em ' + $catSel + ':')
+        foreach ($p in $produtosSel) {
+            if ($p.Qtd -le 0) {
+                Write-Host ($prefixo + '  ID: ' + $p.Id + ' | ' + $p.Nome + ' | R$ ' + ('{0:F2}' -f $p.Preco) + ' | Estoque: 0 — ZERADO') -ForegroundColor Red
+            } else {
+                Write-Host ($prefixo + '  ID: ' + $p.Id + ' | ' + $p.Nome + ' | R$ ' + ('{0:F2}' -f $p.Preco) + ' | Estoque: ' + $p.Qtd)
+            }
+        }
+        Write-Host ''
+
+        $idsValidos = $produtosSel | Select-Object -ExpandProperty Id
+        $pidVal = 0
+        while ($true) {
+            Write-Host -NoNewline ($prefixo + 'Produto ID (' + ($idsValidos -join ', ') + '): ')
+            $lp = Read-Host
+            if ([int]::TryParse($lp, [ref]$pidVal) -and ($idsValidos -contains $pidVal)) { break }
+            Write-Host ($prefixo + 'ID invalido. Escolha um ID da lista acima.') -ForegroundColor Red
+            $pidVal = 0
+        }
+
+        $prodEscolhido = $produtosSel | Where-Object { $_.Id -eq $pidVal } | Select-Object -First 1
+
+        if ($prodEscolhido.Qtd -le 0) {
+            Write-Host ($prefixo + 'Este produto esta com estoque ZERADO. Escolha outro produto.') -ForegroundColor Red
+            $pidVal = 0
+            continue
+        }
+
+        $qtdVal = 0
+        while ($qtdVal -le 0) {
+            Write-Host -NoNewline ($prefixo + 'Quantidade (estoque: ' + $prodEscolhido.Qtd + '): ')
+            $lq = Read-Host
+            if (-not [int]::TryParse($lq, [ref]$qtdVal) -or $qtdVal -le 0) {
+                Write-Host ($prefixo + 'Quantidade invalida.') -ForegroundColor Red; $qtdVal = 0
+            } elseif ($qtdVal -gt $prodEscolhido.Qtd) {
+                Write-Host ($prefixo + 'Quantidade maior que o estoque disponivel (' + $prodEscolhido.Qtd + ').') -ForegroundColor Yellow
+                Write-Host -NoNewline ($prefixo + 'Deseja comprar ' + $prodEscolhido.Qtd + ' unidade(s) disponivel(is)? (S/N): ')
+                $resp = Read-Host
+                if ($resp -match '^[Ss]$') {
+                    $qtdVal = $prodEscolhido.Qtd
+                } else {
+                    Write-Host ($prefixo + 'Compra cancelada. Digite uma nova quantidade.') -ForegroundColor Red
+                    $qtdVal = 0
+                }
+            }
+        }
+
+        return [PSCustomObject]@{ ProdutoId = $pidVal; Quantidade = $qtdVal; Categoria = $catSel }
+    }
+
     Write-Host ''
     Write-Host -NoNewline ' Configurar individualmente cada usuario? (S/N): '
     $individual = Read-Host
@@ -65,54 +214,13 @@ function Subir-Simulacao {
         for ($i = 1; $i -le $numUsuarios; $i++) {
             Write-Host ''
             Write-Host (' --- Usuario #' + $i + ' ---')
-
-            $pidVal = 0
-            while ($pidVal -le 0) {
-                Write-Host -NoNewline '   Produto ID (numero > 0): '
-                $lp = Read-Host
-                if (-not [int]::TryParse($lp, [ref]$pidVal) -or $pidVal -le 0) {
-                    Write-Host '   Produto ID invalido. Digite um numero maior que 0.'
-                    $pidVal = 0
-                }
-            }
-
-            $qtdVal = 0
-            while ($qtdVal -le 0) {
-                Write-Host -NoNewline '   Quantidade (numero > 0): '
-                $lq = Read-Host
-                if (-not [int]::TryParse($lq, [ref]$qtdVal) -or $qtdVal -le 0) {
-                    Write-Host '   Quantidade invalida. Digite um numero maior que 0.'
-                    $qtdVal = 0
-                }
-            }
-
-            $configs += [PSCustomObject]@{ Id = $i; ProdutoId = $pidVal; Quantidade = $qtdVal }
+            $sel = & $selecionarProduto '   '
+            $configs += [PSCustomObject]@{ Id = $i; ProdutoId = $sel.ProdutoId; Quantidade = $sel.Quantidade; Categoria = $sel.Categoria }
         }
     } else {
-        Write-Host ''
-
-        $pidVal = 0
-        while ($pidVal -le 0) {
-            Write-Host -NoNewline ' Produto ID para todos (numero > 0): '
-            $lp = Read-Host
-            if (-not [int]::TryParse($lp, [ref]$pidVal) -or $pidVal -le 0) {
-                Write-Host ' Produto ID invalido. Digite um numero maior que 0.'
-                $pidVal = 0
-            }
-        }
-
-        $qtdVal = 0
-        while ($qtdVal -le 0) {
-            Write-Host -NoNewline ' Quantidade para todos (numero > 0): '
-            $lq = Read-Host
-            if (-not [int]::TryParse($lq, [ref]$qtdVal) -or $qtdVal -le 0) {
-                Write-Host ' Quantidade invalida. Digite um numero maior que 0.'
-                $qtdVal = 0
-            }
-        }
-
+        $sel = & $selecionarProduto ' '
         for ($i = 1; $i -le $numUsuarios; $i++) {
-            $configs += [PSCustomObject]@{ Id = $i; ProdutoId = $pidVal; Quantidade = $qtdVal }
+            $configs += [PSCustomObject]@{ Id = $i; ProdutoId = $sel.ProdutoId; Quantidade = $sel.Quantidade; Categoria = $sel.Categoria }
         }
     }
 
@@ -121,7 +229,7 @@ function Subir-Simulacao {
     Write-Host '   RESUMO DA SIMULACAO'
     Write-Host '=========================================='
     foreach ($c in $configs) {
-        Write-Host ('  Usuario #' + $c.Id + ' | Produto ID: ' + $c.ProdutoId + ' | Quantidade: ' + $c.Quantidade)
+        Write-Host ('  Usuario #' + $c.Id + ' | Categoria: ' + $c.Categoria + ' | Produto ID: ' + $c.ProdutoId + ' | Quantidade: ' + $c.Quantidade)
     }
     Write-Host '------------------------------------------'
     Write-Host -NoNewline ' Confirma? (S/N): '
@@ -136,7 +244,7 @@ function Subir-Simulacao {
     Write-Host (' Subindo ' + $numUsuarios + ' container(s) em background...')
     Write-Host ''
 
-    # Sobe cada container em modo detached (-d) e guarda o ID
+    # Sobe cada container
     $containerIds = @()
     foreach ($c in $configs) {
         $cid = docker compose run `
@@ -158,43 +266,40 @@ function Subir-Simulacao {
     Write-Host ' Aguardando resultado das compras...'
     Write-Host ''
 
-    # Monitora o log de cada container esperando o resultado
     $resultados = @{}
     $pendentes  = [System.Collections.Generic.List[PSCustomObject]]($containerIds)
     $tentativas = 0
-    $maxTentativas = 120  # 120 * 0.5s = 60 segundos maximo
+    $maxTentativas = 120
 
     while ($pendentes.Count -gt 0 -and $tentativas -lt $maxTentativas) {
         $tentativas++
-        $resolvidos = @()
+        $idsParaRemover = @()
 
         foreach ($item in $pendentes) {
             $log = docker logs $item.Id 2>$null
             if ($log -match 'CONFIRMADA') {
                 $resultados[$item.UsuarioId] = 'CONFIRMADA'
-                $resolvidos += $item
+                $idsParaRemover += $item.Id
                 Write-Host ('  Usuario #' + $item.UsuarioId + ' -> CONFIRMADA')
             } elseif ($log -match 'RECUSADA') {
                 $resultados[$item.UsuarioId] = 'RECUSADA'
-                $resolvidos += $item
+                $idsParaRemover += $item.Id
                 Write-Host ('  Usuario #' + $item.UsuarioId + ' -> RECUSADA')
             } elseif ($log -match 'ERRO') {
                 $resultados[$item.UsuarioId] = 'ERRO'
-                $resolvidos += $item
+                $idsParaRemover += $item.Id
                 Write-Host ('  Usuario #' + $item.UsuarioId + ' -> ERRO')
             }
         }
 
-        foreach ($r in $resolvidos) {
-            $pendentes.Remove($r) | Out-Null
+        foreach ($id in $idsParaRemover) {
+            $item = $pendentes | Where-Object { $_.Id -eq $id } | Select-Object -First 1
+            if ($item) { $pendentes.Remove($item) | Out-Null }
         }
 
-        if ($pendentes.Count -gt 0) {
-            Start-Sleep -Milliseconds 500
-        }
+        if ($pendentes.Count -gt 0) { Start-Sleep -Milliseconds 500 }
     }
 
-    # Contabiliza
     $confirmadas = ($resultados.Values | Where-Object { $_ -eq 'CONFIRMADA' }).Count
     $recusadas   = ($resultados.Values | Where-Object { $_ -eq 'RECUSADA'   }).Count
     $erros       = ($resultados.Values | Where-Object { $_ -eq 'ERRO'       }).Count
@@ -214,7 +319,9 @@ function Subir-Simulacao {
     Write-Host '=========================================='
     Write-Host ''
     Write-Host ' Containers ficam ativos no Docker.'
-    Start-Sleep -Seconds 2
+    Write-Host ''
+    Write-Host -NoNewline ' Pressione ENTER para voltar ao menu...'
+    Read-Host | Out-Null
 }
 
 function Acessar-Container {
@@ -361,4 +468,3 @@ while (-not $sair) {
         default { Write-Host ' Opcao invalida.'; Start-Sleep -Seconds 1 }
     }
 }
-
