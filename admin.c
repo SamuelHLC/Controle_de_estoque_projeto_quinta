@@ -297,9 +297,10 @@ int main() {
         printf(" 1. Cadastrar Novo Produto\n");
         printf(" 2. Alterar Nome\n");
         printf(" 3. Alterar Preco\n");
-        printf(" 4. Adicionar Unidades\n");
-        printf(" 5. Remover Produto\n");
-        printf(" 6. Atualizar\n");
+        printf(" 4. Alterar Categoria\n");
+        printf(" 5. Adicionar Unidades\n");
+        printf(" 6. Remover Produto\n");
+        printf(" 7. Atualizar\n");
         printf(" 0. Sair\n");
         printf(" Escolha: ");
 
@@ -311,7 +312,7 @@ int main() {
 
         /* Opcao invalida */
         if (op != 0 && op != 1 && op != 2 && op != 3 &&
-            op != 4 && op != 5 && op != 6) {
+            op != 4 && op != 5 && op != 6 && op != 7) {
             printf(" Opcao invalida! Use as opcoes do menu.\n");
             log_fmt("WARN", "Opcao invalida digitada: %d — sem conexao ao servidor", op);
             pausar();
@@ -319,7 +320,7 @@ int main() {
         }
 
         int sel = -1;
-        if (op >= 2 && op <= 5 && total > 0) {
+        if (op >= 2 && op <= 6 && total > 0) {
             printf(" Selecione o numero do item ([1-%d]): ", total);
             if (scanf("%d", &sel) != 1) {
                 int c; while ((c = getchar()) != '\n' && c != EOF);
@@ -443,8 +444,28 @@ int main() {
                     }
                 } break;
 
-            /* ── Adicionar Unidades ───────────────────────────────── */
+            /* ── Alterar Categoria ───────────────────────────────── */
             case 4:
+                if (sel >= 0 && sel < total) {
+                    char nova_cat[30];
+                    escolher_categoria(nova_cat, sizeof(nova_cat));
+                    int s2 = conectar();
+                    if (s2 >= 0) {
+                        int req[4] = {16, lista[sel].id, 0, 0};
+                        send_completo(s2, req, sizeof(req));
+                        send_completo(s2, nova_cat, sizeof(nova_cat));
+                        memset(resp, 0, sizeof(resp));
+                        recv_completo(s2, resp, 30);
+                        close(s2);
+                        log_fmt("CRUD", "Categoria | admin=%s | id=%d '%s'->'%s' resp='%s'",
+                                ip_proprio, lista[sel].id, lista[sel].category, nova_cat, resp);
+                        printf(" %s\n", resp);
+                    }
+                    pausar();
+                } break;
+
+            /* ── Adicionar Unidades ───────────────────────────────── */
+            case 5:
                 if (sel >= 0 && sel < total) {
                     int n = 0;
                     do {
@@ -460,7 +481,7 @@ int main() {
                 } break;
 
             /* ── Remover Produto ──────────────────────────────────── */
-            case 5:
+            case 6:
                 if (sel >= 0 && sel < total) {
                     cmd_simples(15, lista[sel].id, 0, resp);
                     log_fmt("CRUD", "Remocao | admin=%s | id=%d nome='%s' resp='%s'",
@@ -470,7 +491,7 @@ int main() {
                 } break;
 
             /* ── Atualizar ────────────────────────────────────────── */
-            case 6:
+            case 7:
                 log_fmt("ADMIN", "Lista atualizada manualmente | admin=%s", ip_proprio);
                 break;
         }
