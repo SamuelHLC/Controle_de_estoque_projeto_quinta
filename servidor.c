@@ -398,6 +398,27 @@ void *tratar_conexao(void *arg) {
         close(s);
     }
 
+    /* ── ADMIN: ALTERAR CATEGORIA (op=16) ─────────────────────────── */
+    else if (req[0] == 16) {
+        char novo[30]; memset(novo, 0, sizeof(novo));
+        if (recv_completo(s, novo, sizeof(novo)) <= 0) { close(s); return NULL; }
+        log_fmt("MUTEX", "Travando estoque | admin=%s | op=alterar-categoria", ip);
+        pthread_mutex_lock(&mutex_estoque);
+        char resp[30] = "Erro: Prod nao encontrado";
+        for (int i = 0; i < total; i++) {
+            if (lista[i].id == req[1]) {
+                log_fmt("ADMIN", "Thread %lu | admin=%s | categoria '%s'->'%s'",
+                        (unsigned long)tid, ip, lista[i].category, novo);
+                strncpy(lista[i].category, novo, 29); lista[i].category[29]='\0';
+                salvar_dados(); strcpy(resp, "OK: Categoria alterada"); break;
+            }
+        }
+        send_completo(s, resp, 30);
+        pthread_mutex_unlock(&mutex_estoque);
+        log_fmt("MUTEX", "Estoque liberado | admin=%s | op=alterar-categoria", ip);
+        close(s);
+    }
+
     /* ── ADMIN: REMOVER (op=15) ────────────────────────────────────── */
     else if (req[0] == 15) {
         log_fmt("MUTEX", "Travando estoque | admin=%s | op=remover", ip);
@@ -447,7 +468,8 @@ void *loop_accept(void *arg) {
         if (op != 0  && op != 2  &&
             op != 10 && op != 11 &&
             op != 12 && op != 13 &&
-            op != 14 && op != 15) {
+            op != 14 && op != 15 &&
+            op != 16) {
             close(fd); continue;
         }
 
