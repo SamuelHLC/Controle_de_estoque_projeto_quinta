@@ -48,7 +48,7 @@ Este projeto é um sistema de gestão de estoque desenvolvido em **Linguagem C**
 - **Variável de Condição** — `pthread_cond_t cond_fila` acorda o worker quando um novo pedido é enfileirado
 - **Concorrência com Threads** — `pthread_create` + `pthread_detach` para atender múltiplos clientes em paralelo
 - **Tratamento de Race Condition** — todas as regiões críticas protegidas, testáveis via Valgrind Helgrind
-- **Admin via Socket** — o painel admin se comunica com o servidor via TCP (opcodes 10–15), eliminando conflito de acesso direto ao arquivo
+- **Admin via Socket** — o painel admin se comunica com o servidor via TCP (opcodes 10–16), eliminando conflito de acesso direto ao arquivo
 - **Simulação Distribuída Real** — cada usuário simulado roda em seu próprio container Docker com IP, PID, memória e log independentes (via `simular.ps1`)
 - **Ordenação QuickSort** — algoritmo O(n log n) para organização dos produtos por ID
 - **Logs Thread-Safe** — todas as operações registradas com timestamp, IP e nível em arquivos gerados automaticamente
@@ -94,7 +94,7 @@ Worker Thread (sempre rodando)
 Controle_de_estoque_projeto_quinta/
 ├── servidor.c          # Núcleo: threads, mutex, semáforo, fila, worker, sockets
 ├── cliente.c           # Interface de compras — modo interativo e modo automático
-├── admin.c             # Painel CRUD via socket TCP (opcodes 10–15)
+├── admin.c             # Painel CRUD via socket TCP (opcodes 10–16)
 ├── CMakeLists.txt      # Build moderno com clang + pthread + lrt
 ├── Dockerfile          # Imagem debian:stable-slim + clang + cmake + valgrind
 ├── docker-compose.yml  # Orquestração: servidor sobe sozinho, admin/cliente manuais
@@ -242,9 +242,10 @@ docker compose run --rm admin-painel
 | `1` Cadastrar Novo Produto | Envia opcode 11 ao servidor; ID gerado automaticamente via mutex_estoque |
 | `2` Alterar Nome | Envia opcode 12; log registra valor antes e depois |
 | `3` Alterar Preço | Envia opcode 13; log registra valor antes e depois |
-| `4` Adicionar Unidades | Envia opcode 14; incremento seguro via mutex_estoque |
-| `5` Remover Produto | Envia opcode 15; remoção com deslocamento do vetor |
-| `6` / `7` Próxima/Anterior | Paginação de 5 em 5 com QuickSort por ID |
+| `4` Alterar Categoria | Envia opcode 16; altera a categoria do produto via mutex_estoque |
+| `5` Adicionar Unidades | Envia opcode 14; incremento seguro via mutex_estoque |
+| `6` Remover Produto | Envia opcode 15; remoção com deslocamento do vetor |
+| `7` Atualizar | Recarrega a lista do servidor sem nenhuma ação de CRUD |
 | `0` Sair | Encerramento com log de auditoria |
 
 ---
@@ -255,14 +256,17 @@ docker compose run --rm admin-painel
 docker compose run --rm cliente-pdv
 ```
 
+Ao abrir, o cliente busca os produtos do servidor e exibe o menu de categorias. Categorias com produtos mostram a quantidade disponível; categorias sem produtos aparecem em cinza. Se não houver nenhum produto cadastrado, o cliente avisa e aguarda.
+
 | Opção | O que testa |
 |---|---|
 | `1` Comprar | Conexão TCP -> enfileira na fila -> worker processa via mutex_estoque |
-| `2` Próximo | Navegação entre produtos recebidos via socket + semáforo de leitura |
+| `2` Próximo | Navegação entre produtos da categoria selecionada |
 | `3` Anterior | Navegação reversa |
-| `4` Sair | Encerramento com log |
+| `4` Trocar Categoria | Volta ao menu de categorias para escolher outra |
+| `5` Sair | Encerramento com log |
 
-Para testar estoque insuficiente, tente comprar quantidade maior do que o disponível. O worker retorna `Erro: Estoque insuficiente`.
+Produtos com estoque zerado aparecem como `ESTOQUE: 0 — INDISPONIVEL` e não permitem compra. Ao tentar comprar quantidade maior que o disponível, o sistema pergunta se deseja comprar a quantidade disponível.
 
 ---
 
@@ -272,7 +276,7 @@ Para testar estoque insuficiente, tente comprar quantidade maior do que o dispon
 .\simular.ps1
 ```
 
-Cada usuário é um container Docker independente. Acompanhe os logs do servidor em tempo real — você verá as threads enfileirando pedidos, o mutex travando e liberando o estoque, e o worker processando em background simultaneamente.
+Cada usuário é um container Docker independente. O script busca os produtos do servidor antes de simular, mostrando as categorias disponíveis com quantidade de produtos. Categorias sem produtos aparecem em cinza. Produtos com estoque zerado são bloqueados. Se a quantidade solicitada for maior que o estoque, o sistema pergunta se deseja usar a quantidade disponível. Acompanhe os logs do servidor em tempo real — você verá as threads enfileirando pedidos, o mutex travando e liberando o estoque, e o worker processando em background simultaneamente.
 
 ---
 
@@ -512,6 +516,7 @@ docker exec -it servidor-estoque bash
 | `13` | Admin | Alterar preço |
 | `14` | Admin | Adicionar unidades |
 | `15` | Admin | Remover produto |
+| `16` | Admin | Alterar categoria |
 
 ---
 
@@ -526,6 +531,6 @@ docker exec -it servidor-estoque bash
 | `GetCurrentProcessId()` | `getpid()` |
 | `system("cls")` / `system("pause")` | `system("clear")` / `getchar()` |
 | `closesocket(s)` | `close(s)` |
-| Admin acessa arquivo diretamente | Admin usa socket TCP (opcodes 10–15) |
+| Admin acessa arquivo diretamente | Admin usa socket TCP (opcodes 10–16) |
 | Simulação via threads num único processo | Simulação via 1 container Docker por usuário |
 | Processamento síncrono direto | Fila FIFO + worker thread desacoplado |
